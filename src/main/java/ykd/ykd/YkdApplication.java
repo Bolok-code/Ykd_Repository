@@ -10,4 +10,5 @@ public class YkdApplication {
         SpringApplication.run(YkdApplication.class, args);
     }
 
+
 }
