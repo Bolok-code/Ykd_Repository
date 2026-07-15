@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 public class Test {
 @GetMapping("/Hello")
     public String   Hello(){
-    return "HelloWorld1234567";
+    return "HelloWorld666";
 }
 
 }
