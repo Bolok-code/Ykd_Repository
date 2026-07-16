@@ -17,6 +17,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static java.awt.SystemColor.info;
+
 @Service
 @RequiredArgsConstructor
 public class WeatherServiceImpl implements WeatherService {
@@ -32,6 +34,11 @@ public class WeatherServiceImpl implements WeatherService {
 
     @Override
     public WeatherResponse getWeatherByCity(String city, String type) {
+        if (city == null || city.isBlank()) {
+            throw new BusinessException(ErrorCode.CITY_NOT_FOUND, "城市名不能为空");
+        }
+        city = city.trim();
+
         String adcode = city.matches("\\d+") ? city : resolveCityCode(city).get("adcode");
         if (adcode == null) {
             throw new BusinessException(ErrorCode.CITY_NOT_FOUND, "未找到城市编码: " + city);
@@ -41,7 +48,7 @@ public class WeatherServiceImpl implements WeatherService {
             String json = restTemplate.getForObject(GAODE_URL, String.class, apiKey, adcode, type);
             JsonNode jsonNode = objectMapper.readTree(json);
             if (!"1".equals(jsonNode.path("status").asText())) {
-                throw new BusinessException(ErrorCode.API_ERROR);
+                throw new BusinessException(ErrorCode.API_ERROR, "天气查询失败: ");
             }
             return "base".equals(type) ? parseLive(jsonNode) : parseForecast(jsonNode);
         } catch (BusinessException e) {
