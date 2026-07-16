@@ -104,8 +104,22 @@ public class WeatherService {
 
     private void checkError(JsonNode root) {
         JsonNode sc = root.get("status_code");
-        if (sc != null) throw new CliException(ErrorCode.NETWORK_ERROR,
-                "心知天气 API 返回错误: " + root.get("status").asText("未知"));
+        if (sc != null) {
+            String code = sc.asText();
+            String status = root.get("status").asText("未知错误");
+            String msg = translateApiError(code, status);
+            ErrorCode type = code.contains("KEY") ? ErrorCode.CONFIG_ERROR : ErrorCode.INVALID_INPUT;
+            throw new CliException(type, msg);
+        }
+    }
+
+    private String translateApiError(String code, String status) {
+        String s = status.toLowerCase();
+        if (code.contains("005") || s.contains("key")) return "天气 API Key 无效，请检查 WEATHER_API_KEY 是否正确。";
+        if (code.contains("010") || s.contains("location")) return "未找到该城市，请检查城市名是否正确。";
+        if (code.contains("020") || s.contains("ip")) return "API 密钥未绑定当前 IP 地址，请在管理后台添加白名单。";
+        if (code.contains("030") || s.contains("limit")) return "今日 API 调用次数已用尽，请明天再试或升级套餐。";
+        return "天气查询服务异常: " + status + " (代码: " + code + ")";
     }
 
     private String safeText(JsonNode n, String f, String d) { JsonNode v = n.get(f); return (v != null && !v.isNull()) ? v.asText() : d; }

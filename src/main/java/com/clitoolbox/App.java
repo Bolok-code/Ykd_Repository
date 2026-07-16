@@ -1,12 +1,13 @@
 package com.clitoolbox;
 
 import com.clitoolbox.commands.*;
+import com.clitoolbox.config.LoggingConfig;
 import com.clitoolbox.exception.*;
-import com.clitoolbox.weather.WeatherService;
 
 public class App {
 
     public static void main(String[] args) {
+        LoggingConfig.init();
         try {
             String command = (args.length == 0) ? "help" : args[0].toLowerCase();
 
