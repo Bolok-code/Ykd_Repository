@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>com.github.openilink</groupId>
+  <artifactId>openilink-sdk-java</artifactId>
+  <versioning>
+    <versions>
+      <version>main-SNAPSHOT</version>
+    </versions>
+    <lastUpdated>20260716000000</lastUpdated>
+  </versioning>
+</metadata>
