@@ -33,7 +33,7 @@
         <dependency>
             <groupId>com.github.openilink</groupId>
             <artifactId>openilink-sdk-java</artifactId>
-            <version>main-SNAPSHOT</version>
+            <version>main-2384d09b87-1</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
