@@ -1,4 +1,4 @@
-﻿﻿HELP.md
+﻿HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
@@ -32,11 +32,22 @@ build/
 ### VS Code ###
 .vscode/
 
+### macOS ###
+.DS_Store
+
+### 环境变量 ###
+.env
+.env.local
+.env.*.local
+
 ### iLink 微信机器人 ###
 ilink-creds.json
 ilink-creds.json.sync
 *.creds.json
 *.creds.json.sync
+
+### LLM / AI 凭证 ###
+*.llm-creds.*
 
 /ykd/
 

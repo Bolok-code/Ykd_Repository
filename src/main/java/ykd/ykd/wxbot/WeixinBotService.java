@@ -1,6 +1,4 @@
 package ykd.ykd.wxbot;
-
-
 import com.github.wechat.ilink.sdk.ILinkClient;
 import com.github.wechat.ilink.sdk.core.listener.OnLoginListener;
 import com.github.wechat.ilink.sdk.core.login.LoginContext;
@@ -12,9 +10,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import ykd.ykd.exception.BusinessException;
+import ykd.ykd.exception.ErrorCode;
+import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.weather.api.dto.WeatherResponse;
 import ykd.ykd.weather.service.WeatherService;
-
 import java.util.List;
 
 /**
@@ -32,7 +31,7 @@ import java.util.List;
 public class WeixinBotService {
 
     private final WeatherService weatherService;
-
+    private  final LlmService llmService;
     private ILinkClient client;
     private volatile boolean running = true;
 
@@ -135,33 +134,51 @@ public class WeixinBotService {
     }
 
     /**
-     * 处理单条微信消息，解析城市名并回复天气。
+     * 消息调度：提取文本 → 判断意图 → 分发处理 → 统一回复。
      *
-     * <p>仅处理包含文本内容的消息：提取城市名 → 调用天气服务 → 格式化回复。</p>
-     * <p>回复过程中开启"正在输入"状态以提升交互体验。</p>
-     *
-     * @param msg 微信 iLink 消息对象，包含发送者 ID 和消息条目列表
+     * <p>天气相关走 {@link #handleWeather(String)}，其余交给 {@link LlmService#chat(String)}，
+     * 所有回复由 {@link #safeSendText(String, String)} 统一发送。</p>
      */
     private void handleMessage(WeixinMessage msg) {
         if (msg.getItem_list() == null) return;
 
         String fromUserId = msg.getFrom_user_id();
-        String cityName = extractText(msg);
+        String text = extractText(msg);
+        if (text == null || text.isBlank()) return;
 
-        if (cityName == null || cityName.isBlank()) return;
+        String reply = isWeatherQuery(text)
+                ? handleWeather(text.trim())
+                : llmService.chat(text.trim());
 
-        log.info("收到天气查询: userId={}, city={}", fromUserId, cityName);
+        safeSendText(fromUserId, reply);
+    }
 
+    /**
+     * 判断是否为天气查询：命中天气关键词，或仅由 2-4 个汉字组成的纯城市名。
+     */
+    private boolean isWeatherQuery(String text) {
+        return text.contains("天气") || text.contains("气温")
+                || text.contains("几度") || text.contains("下雨")
+                || text.contains("风") || text.matches("^[一-龥]{2,4}$");
+    }
+
+    /**
+     * 执行天气查询并返回格式化结果。
+     *
+     * <p>异常时返回文本错误提示，不向上抛出，保证消息流程不中断。</p>
+     */
+    private String handleWeather(String cityName) {
         try {
-            WeatherResponse weather = weatherService.getWeatherByCity(cityName.trim(), "base");
-            String reply = formatWeather(weather);
-            client.sendTextWithTyping(fromUserId, reply, 1000L);
-            log.info("已回复天气: userId={}, city={}", fromUserId, cityName);
+            WeatherResponse weather = weatherService.getWeatherByCity(cityName, "base");
+            return formatWeather(weather);
         } catch (BusinessException e) {
-            safeSendText(fromUserId, "❌ " + e.getMessage());
+            if (e.getErrorCode() == ErrorCode.CITY_NOT_FOUND) {
+                return "❌ 未找到城市「" + cityName + "」，请输入正确的城市名，如：北京";
+            }
+            return "❌ " + e.getMessage();
         } catch (Exception e) {
             log.error("查询天气异常", e);
-            safeSendText(fromUserId, "❌ 查询天气失败，请稍后重试");
+            return "❌ 查询天气失败，请稍后重试";
         }
     }
 

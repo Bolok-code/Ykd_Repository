@@ -8,6 +8,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import ykd.ykd.exception.BusinessException;
 import ykd.ykd.exception.ErrorCode;
+
 import ykd.ykd.weather.api.dto.ForecastDay;
 import ykd.ykd.weather.api.dto.WeatherResponse;
 import ykd.ykd.weather.service.WeatherService;
@@ -23,7 +24,7 @@ import static java.awt.SystemColor.info;
 @RequiredArgsConstructor
 public class WeatherServiceImpl implements WeatherService {
     private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;       // Jackson 自带，无需配置
+    private final ObjectMapper objectMapper;// Jackson 自带，无需配置
     @Value("${gaode.key}")
     private String apiKey;
 
