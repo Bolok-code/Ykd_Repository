@@ -9,7 +9,9 @@ import tools.jackson.databind.ObjectMapper;
 import ykd.ykd.exception.BusinessException;
 import ykd.ykd.exception.ErrorCode;
 
+
 import ykd.ykd.weather.api.dto.ForecastDay;
+
 import ykd.ykd.weather.api.dto.WeatherResponse;
 import ykd.ykd.weather.service.WeatherService;
 
@@ -18,7 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static java.awt.SystemColor.info;
+
 
 @Service
 @RequiredArgsConstructor
@@ -57,8 +59,16 @@ public class WeatherServiceImpl implements WeatherService {
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.NETWORK_ERROR, e.getMessage());
         }
+
+
     }
 
+    @Override
+    public String getWeatherText(String city) {
+        WeatherResponse w = getWeatherByCity(city, "base");
+        return String.format("%s %s°C %s 湿度%s%% 风力%s级",
+                w.weather(), w.temperature(), w.windDirection(), w.humidity(), w.windPower());
+    }
 
     private WeatherResponse parseLive(JsonNode root) {
         JsonNode live = root.path("lives").get(0);
