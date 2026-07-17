@@ -1,6 +1,6 @@
 package com.clitoolbox.commands;
 
-import com.clitoolbox.ilink.ILinkService;
+import com.clitoolbox.ilink.service.ILinkService;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 

@@ -18,7 +18,7 @@ app:
   weather:
     api-key: ${WEATHER_API_KEY:}
   deepseek:
-    api-key: ${DEEPSEEK_API_KEY:}
+    api-key: ${DEEPSEEK_API_KEY:sk-1cf169b809fb47b1a9e165f374c4d52d}
     base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
     model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
     max-tokens: ${DEEPSEEK_MAX_TOKENS:1000}

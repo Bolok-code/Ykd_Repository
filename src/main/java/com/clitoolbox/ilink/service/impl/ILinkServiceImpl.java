@@ -1,9 +1,10 @@
-package com.clitoolbox.ilink;
+package com.clitoolbox.ilink.service.impl;
 
 import com.clitoolbox.conversation.ChatService;
 import com.clitoolbox.conversation.PerUserTaskDispatcher;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
+import com.clitoolbox.ilink.service.ILinkService;
 import com.clitoolbox.weather.WeatherResult;
 import com.clitoolbox.weather.WeatherService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,8 +36,8 @@ import org.springframework.stereotype.Service;
 
 @Service
 @Lazy
-public class ILinkService {
-    private static final Logger LOG = LoggerFactory.getLogger(ILinkService.class);
+public class ILinkServiceImpl implements ILinkService {
+    private static final Logger LOG = LoggerFactory.getLogger(ILinkServiceImpl.class);
     private static final Path WORK_DIR = Paths.get("work");
     private static final Path SESSION_FILE = WORK_DIR.resolve("ilink-session.json");
     private static final long RETRY_DELAY_MS = 2_000L;
@@ -47,7 +48,7 @@ public class ILinkService {
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private volatile ILinkClient client;
 
-    public ILinkService(
+    public ILinkServiceImpl(
             PerUserTaskDispatcher chatDispatcher,
             ObjectMapper objectMapper,
             WeatherService weatherService,
@@ -58,6 +59,7 @@ public class ILinkService {
         this.chatServiceProvider = chatServiceProvider;
     }
 
+    @Override
     public void login() {
         System.out.println("正在获取登录二维码...");
         closeClient();
@@ -92,6 +94,7 @@ public class ILinkService {
         }
     }
 
+    @Override
     public void listen() {
         ResumeContext resumeContext = loadSession();
         if (resumeContext == null) {

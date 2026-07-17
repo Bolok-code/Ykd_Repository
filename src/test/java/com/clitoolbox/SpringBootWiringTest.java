@@ -2,13 +2,15 @@ package com.clitoolbox;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.clitoolbox.ai.AiChatClient;
 import com.clitoolbox.ai.SpringAiDeepSeekClient;
 import com.clitoolbox.config.DeepSeekConfig;
-import com.clitoolbox.ilink.ILinkService;
+import com.clitoolbox.ilink.service.ILinkService;
+import com.clitoolbox.ilink.service.impl.ILinkServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,6 +36,8 @@ class SpringBootWiringTest {
         assertTrue(aiChatClient instanceof SpringAiDeepSeekClient);
         assertEquals("deepseek-v4-flash", config.model());
         assertFalse(config.toString().contains("test-api-key"));
-        assertNotNull(applicationContext.getBean(ILinkService.class));
+        ILinkService iLinkService = applicationContext.getBean(ILinkService.class);
+        assertNotNull(iLinkService);
+        assertInstanceOf(ILinkServiceImpl.class, iLinkService);
     }
 }

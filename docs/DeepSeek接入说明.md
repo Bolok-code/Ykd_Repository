@@ -7,7 +7,8 @@
   -> OpenILink SDK
   -> Spring Boot
   -> CliApplicationRunner / ChatCommand
-  -> ILinkService（收消息、发消息）
+  -> ILinkService（微信能力接口）
+  -> ILinkServiceImpl（登录、收消息、发消息与会话恢复）
   -> PerUserTaskDispatcher（同用户串行、不同用户并行）
   -> ChatService（命令、多轮历史）
   -> AiChatClient
@@ -20,7 +21,8 @@
 
 - `App`：Spring Boot 启动入口，当前以非 Web 的 CLI 模式运行。
 - `CliApplicationRunner`：读取命令行参数并从 Spring 容器取得对应命令 Bean。
-- `ILinkService`：只处理微信登录、消息拉取、文本提取和回复。
+- `ILinkService`：定义微信登录和消息监听能力，上层命令只依赖接口。
+- `ILinkServiceImpl`：封装具体 OpenILink SDK 客户端、会话恢复、消息拉取和回复。
 - `PerUserTaskDispatcher`：避免 DeepSeek 慢请求阻塞消息拉取，并保证同一用户的回复顺序。
 - `ChatService`：维护每个微信用户独立的对话历史，处理 `/clear` 等命令。
 - `AiChatClient`：隔离具体大模型供应商。
@@ -195,6 +197,8 @@ src/main/java/com/clitoolbox/
 │  ├─ DeepSeekProperties.java       Boot 配置绑定
 │  └─ DeepSeekConfig.java           已校验的运行配置
 ├─ conversation/                    多轮历史与并发队列
-├─ ilink/ILinkService.java          微信收发主链路
+├─ ilink/service/
+│  ├─ ILinkService.java             微信服务接口
+│  └─ impl/ILinkServiceImpl.java    OpenILink SDK 实现与微信收发主链路
 └─ weather/                         天气能力
 ```
