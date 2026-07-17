@@ -12,17 +12,6 @@
     <name>CLI-Toolbox</name>
     <description>多模块命令行工具箱 —— 集成基础命令、天气查询、iLink SDK 等功能</description>
 
-    <repositories>
-        <repository>
-            <id>local-lib</id>
-            <url>file://${project.basedir}/lib</url>
-        </repository>
-        <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
-        </repository>
-    </repositories>
-
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
@@ -31,9 +20,16 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.github.openilink</groupId>
-            <artifactId>openilink-sdk-java</artifactId>
-            <version>main-2384d09b87-1</version>
+            <groupId>io.github.lith0924</groupId>
+            <artifactId>wechat-ilink-sdk</artifactId>
+            <version>2.3.3</version>
+            <exclusions>
+                <!-- 项目统一使用 slf4j-simple，避免同时加载两个日志实现 -->
+                <exclusion>
+                    <groupId>ch.qos.logback</groupId>
+                    <artifactId>logback-classic</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -44,7 +40,7 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
-            <version>2.0.9</version>
+            <version>2.0.13</version>
             <scope>runtime</scope>
         </dependency>
     </dependencies>

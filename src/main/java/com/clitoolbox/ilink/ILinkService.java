@@ -1,15 +1,17 @@
 package com.clitoolbox.ilink;
 
-import com.openilink.ILinkClient;
-import com.openilink.auth.LoginCallbacks;
-import com.openilink.model.response.LoginResult;
-import com.openilink.monitor.MonitorOptions;
-import com.openilink.exception.NoContextTokenException;
-import com.openilink.util.MessageHelper;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
 import com.clitoolbox.weather.WeatherResult;
 import com.clitoolbox.weather.WeatherService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.wechat.ilink.sdk.ILinkClient;
+import com.github.wechat.ilink.sdk.core.config.ILinkConfig;
+import com.github.wechat.ilink.sdk.core.context.ResumeContext;
+import com.github.wechat.ilink.sdk.core.exception.SessionExpiredException;
+import com.github.wechat.ilink.sdk.core.login.LoginContext;
+import com.github.wechat.ilink.sdk.core.model.MessageItem;
+import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -17,6 +19,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -24,63 +28,133 @@ import java.util.regex.Pattern;
 
 public class ILinkService {
     private static final Logger LOG = Logger.getLogger(ILinkService.class.getName());
-    private static final String TOKEN_FILE = "work/bot-token.txt";
-    private static final String BUF_FILE = "work/bot-buf.txt";
-    private ILinkClient client;
+    private static final Path WORK_DIR = Paths.get("work");
+    private static final Path SESSION_FILE = WORK_DIR.resolve("ilink-session.json");
+    private static final long RETRY_DELAY_MS = 2_000L;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private volatile ILinkClient client;
 
     public void login() {
         System.out.println("正在获取登录二维码...");
-        client = ILinkClient.builder().token("").build();
+        closeClient();
+        client = createClient(null);
         try {
-            LoginResult result = client.loginWithQR(new LoginCallbacks() {
-                @Override public void onQRCode(String url) {
-                    System.out.println("========== iLink 登录 ==========");
-                    System.out.println("请用微信扫描以下二维码:");
-                    System.out.println(url);
-                    System.out.println("================================");
-                }
-                @Override public void onScanned() {
-                    System.out.println("已扫码！请在微信上确认登录...");
-                }
-                @Override public void onExpired(int attempt, int max) {
-                    System.out.println("二维码已过期，正在刷新... (" + attempt + "/" + max + ")");
-                }
-            });
-            if (!result.isConnected()) throw new CliException(ErrorCode.NETWORK_ERROR, "登录失败");
-            saveToken(result.getBotToken());
-            System.out.println("登录成功! BotID=" + result.getBotId() + " (Token 已保存)");
+            String qrCodeContent = client.executeLogin();
+            System.out.println("========== iLink 登录 ==========");
+            System.out.println("请用微信扫描以下二维码内容:");
+            System.out.println(qrCodeContent);
+            System.out.println("================================");
+            System.out.println("等待扫码并在微信上确认...");
+
+            LoginContext context = client.getLoginFuture().get();
+            saveSession(client.exportResumeContext());
+            System.out.println("登录成功! BotID=" + context.getBotId() + " (会话已保存)");
             System.out.println("现在开始监听消息...\n");
-            listen();
-        } catch (CliException e) { throw e; }
-        catch (Exception e) { throw new CliException(ErrorCode.UNKNOWN, "登录失败: " + e.getMessage()); }
+            listenWithCurrentClient();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            closeClient();
+            throw new CliException(ErrorCode.NETWORK_ERROR, "登录被中断。");
+        } catch (ExecutionException e) {
+            closeClient();
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new CliException(ErrorCode.NETWORK_ERROR, "登录失败: " + cause.getMessage());
+        } catch (CliException e) {
+            closeClient();
+            throw e;
+        } catch (Exception e) {
+            closeClient();
+            throw new CliException(ErrorCode.UNKNOWN, "登录失败: " + e.getMessage());
+        }
     }
 
     public void listen() {
-        String token = loadToken();
-        if (token == null || token.isEmpty()) { login(); return; }
-        client = ILinkClient.builder().token(token).build();
+        ResumeContext resumeContext = loadSession();
+        if (resumeContext == null) {
+            login();
+            return;
+        }
+        closeClient();
+        client = createClient(resumeContext);
+        listenWithCurrentClient();
+    }
+
+    private void listenWithCurrentClient() {
         System.out.println("正在连接 iLink 消息服务...");
+        ILinkClient activeClient = client;
         AtomicBoolean stop = new AtomicBoolean(false);
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> { stop.set(true); System.out.println("\n断开连接..."); }));
-        MonitorOptions options = MonitorOptions.builder()
-            .initialBuf(loadBuf())
-            .onBufUpdate(buf -> saveBuf(buf))
-            .onError(err -> LOG.warning("监听错误: " + err.getMessage()))
-            .onSessionExpired(() -> { System.out.println("会话已过期，请重新登录。"); deleteTokenFile(); })
-            .build();
+        Thread shutdownHook = new Thread(() -> {
+            stop.set(true);
+            System.out.println("\n断开连接...");
+            closeClient();
+        }, "ilink-shutdown");
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+
         System.out.println("已连接！发送城市名即可查询天气 (按 Ctrl+C 停止)...\n");
-        client.monitor(msg -> {
-            String userId = msg.getFromUserId();
-            String text = MessageHelper.extractText(msg);
-            if (text != null && !text.isEmpty()) {
-                System.out.println("[" + userId + "] " + text);
+
+        try {
+            while (!stop.get()) {
                 try {
-                    client.push(userId, processMessage(text));
-                    System.out.println("  -> 已回复");
-                } catch (NoContextTokenException e) { System.out.println("  -> 无法回复: 缺少会话上下文"); }
-                catch (Exception e) { System.out.println("  -> 回复失败: " + e.getMessage()); }
+                    List<WeixinMessage> messages = activeClient.getUpdates();
+                    saveSession(activeClient.exportResumeContext());
+                    for (WeixinMessage message : messages) {
+                        handleMessage(activeClient, message);
+                    }
+                } catch (SessionExpiredException e) {
+                    deleteSessionFile();
+                    System.out.println("会话已过期，请执行 chat login 重新登录。");
+                    break;
+                } catch (IOException e) {
+                    if (stop.get()) {
+                        break;
+                    }
+                    LOG.warning("监听错误: " + e.getMessage());
+                    sleepBeforeRetry(stop);
+                }
             }
-        }, options, stop);
+        } finally {
+            stop.set(true);
+            closeClient();
+            try {
+                Runtime.getRuntime().removeShutdownHook(shutdownHook);
+            } catch (IllegalStateException ignored) {
+                // JVM 已进入关闭阶段，无需移除钩子。
+            }
+        }
+    }
+
+    private void handleMessage(ILinkClient activeClient, WeixinMessage message) {
+        String userId = message.getFrom_user_id();
+        String text = extractText(message);
+        if (userId == null || userId.isBlank() || text == null || text.isBlank()) {
+            return;
+        }
+
+        System.out.println("[" + userId + "] " + text);
+        try {
+            activeClient.sendText(userId, processMessage(text));
+            System.out.println("  -> 已回复");
+        } catch (Exception e) {
+            System.out.println("  -> 回复失败: " + e.getMessage());
+        }
+    }
+
+    private String extractText(WeixinMessage message) {
+        if (message.getItem_list() == null) {
+            return null;
+        }
+        StringBuilder text = new StringBuilder();
+        for (MessageItem item : message.getItem_list()) {
+            if (item != null && item.getText_item() != null
+                    && item.getText_item().getText() != null
+                    && !item.getText_item().getText().isBlank()) {
+                if (!text.isEmpty()) {
+                    text.append('\n');
+                }
+                text.append(item.getText_item().getText());
+            }
+        }
+        return text.isEmpty() ? null : text.toString();
     }
 
     /** 智能消息处理: XX天气 → 查天气 | 纯城市名 → 查天气 | 其他 → 原样回复 */
@@ -118,9 +192,90 @@ public class ILinkService {
             + "更新时间: " + sdf.format(new Date(r.updateTime()));
     }
 
-    private void saveToken(String s) { try { Files.createDirectories(Paths.get("work")); Files.writeString(Paths.get(TOKEN_FILE), s, StandardCharsets.UTF_8); } catch (IOException e) { LOG.warning("无法保存 Token"); } }
-    private String loadToken() { try { Path p = Paths.get(TOKEN_FILE); if (Files.exists(p)) return Files.readString(p, StandardCharsets.UTF_8).trim(); } catch (IOException e) {} return null; }
-    private void saveBuf(String s) { try { Files.writeString(Paths.get(BUF_FILE), s, StandardCharsets.UTF_8); } catch (IOException e) {} }
-    private String loadBuf() { try { Path p = Paths.get(BUF_FILE); if (Files.exists(p)) return Files.readString(p, StandardCharsets.UTF_8).trim(); } catch (IOException e) {} return null; }
-    private void deleteTokenFile() { try { Files.deleteIfExists(Paths.get(TOKEN_FILE)); Files.deleteIfExists(Paths.get(BUF_FILE)); } catch (IOException e) {} }
+    private ILinkClient createClient(ResumeContext resumeContext) {
+        ILinkConfig config = ILinkConfig.builder()
+                .heartbeatEnabled(false)
+                .build();
+        var builder = ILinkClient.builder().config(config);
+        if (resumeContext != null) {
+            builder.resumeContext(resumeContext);
+        }
+        return builder.build();
+    }
+
+    private void saveSession(ResumeContext resumeContext) {
+        if (resumeContext == null || resumeContext.getLoginContext() == null) {
+            return;
+        }
+        LoginContext login = resumeContext.getLoginContext();
+        SessionData data = new SessionData(
+                login.getBotToken(),
+                login.getUserId(),
+                login.getBotId(),
+                login.getBaseUrl(),
+                resumeContext.getUpdatesCursor());
+        try {
+            Files.createDirectories(WORK_DIR);
+            Files.writeString(SESSION_FILE, OBJECT_MAPPER.writeValueAsString(data), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOG.warning("无法保存 iLink 会话: " + e.getMessage());
+        }
+    }
+
+    private ResumeContext loadSession() {
+        if (!Files.exists(SESSION_FILE)) {
+            return null;
+        }
+        try {
+            SessionData data = OBJECT_MAPPER.readValue(
+                    Files.readString(SESSION_FILE, StandardCharsets.UTF_8), SessionData.class);
+            if (data.botToken() == null || data.botToken().isBlank()
+                    || data.botId() == null || data.botId().isBlank()
+                    || data.baseUrl() == null || data.baseUrl().isBlank()) {
+                throw new IOException("会话信息不完整");
+            }
+            LoginContext login = new LoginContext(
+                    data.botToken(), data.userId(), data.botId(), data.baseUrl());
+            return ResumeContext.builder(login)
+                    .updatesCursor(data.updatesCursor())
+                    .build();
+        } catch (Exception e) {
+            LOG.warning("无法读取 iLink 会话，将重新登录: " + e.getMessage());
+            deleteSessionFile();
+            return null;
+        }
+    }
+
+    private void deleteSessionFile() {
+        try {
+            Files.deleteIfExists(SESSION_FILE);
+        } catch (IOException e) {
+            LOG.warning("无法删除失效的 iLink 会话: " + e.getMessage());
+        }
+    }
+
+    private void sleepBeforeRetry(AtomicBoolean stop) {
+        try {
+            Thread.sleep(RETRY_DELAY_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            stop.set(true);
+        }
+    }
+
+    private synchronized void closeClient() {
+        ILinkClient current = client;
+        client = null;
+        if (current != null) {
+            current.close();
+        }
+    }
+
+    private record SessionData(
+            String botToken,
+            String userId,
+            String botId,
+            String baseUrl,
+            String updatesCursor) {
+    }
 }
