@@ -1,6 +1,8 @@
 spring:
   application:
     name: CLI-Toolbox
+  config:
+    import: optional:file:./config/application-local.yml
   main:
     banner-mode: "off"
     log-startup-info: false
@@ -25,3 +27,11 @@ app:
     timeout-seconds: ${DEEPSEEK_TIMEOUT_SECONDS:60}
     thinking-enabled: ${DEEPSEEK_THINKING_ENABLED:false}
     history-rounds: ${DEEPSEEK_HISTORY_ROUNDS:10}
+  bailian:
+    api-key: ${DASHSCOPE_API_KEY:}
+    workspace-id: ${BAILIAN_WORKSPACE_ID:}
+    region: ${BAILIAN_REGION:cn-beijing}
+    vision-model: ${BAILIAN_VISION_MODEL:qwen3.7-plus}
+    image-model: ${BAILIAN_IMAGE_MODEL:qwen-image-2.0}
+    image-size: ${BAILIAN_IMAGE_SIZE:1024*1024}
+    timeout-seconds: ${BAILIAN_TIMEOUT_SECONDS:180}

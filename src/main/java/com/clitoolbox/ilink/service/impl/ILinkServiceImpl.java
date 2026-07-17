@@ -1,9 +1,14 @@
 package com.clitoolbox.ilink.service.impl;
 
+import com.clitoolbox.ai.image.GeneratedImage;
+import com.clitoolbox.ai.image.ImageGenerationClient;
+import com.clitoolbox.ai.vision.ImageUnderstandingClient;
 import com.clitoolbox.conversation.ChatService;
 import com.clitoolbox.conversation.PerUserTaskDispatcher;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
+import com.clitoolbox.ilink.router.ILinkMessageRouter;
+import com.clitoolbox.ilink.router.ILinkMessageRouter.MessageRoute;
 import com.clitoolbox.ilink.service.ILinkService;
 import com.clitoolbox.weather.WeatherResult;
 import com.clitoolbox.weather.WeatherService;
@@ -45,6 +50,9 @@ public class ILinkServiceImpl implements ILinkService {
     private final ObjectMapper objectMapper;
     private final WeatherService weatherService;
     private final ObjectProvider<ChatService> chatServiceProvider;
+    private final ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider;
+    private final ObjectProvider<ImageGenerationClient> imageGenerationClientProvider;
+    private final ILinkMessageRouter messageRouter;
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private volatile ILinkClient client;
 
@@ -52,11 +60,17 @@ public class ILinkServiceImpl implements ILinkService {
             PerUserTaskDispatcher chatDispatcher,
             ObjectMapper objectMapper,
             WeatherService weatherService,
-            ObjectProvider<ChatService> chatServiceProvider) {
+            ObjectProvider<ChatService> chatServiceProvider,
+            ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider,
+            ObjectProvider<ImageGenerationClient> imageGenerationClientProvider,
+            ILinkMessageRouter messageRouter) {
         this.chatDispatcher = chatDispatcher;
         this.objectMapper = objectMapper;
         this.weatherService = weatherService;
         this.chatServiceProvider = chatServiceProvider;
+        this.imageUnderstandingClientProvider = imageUnderstandingClientProvider;
+        this.imageGenerationClientProvider = imageGenerationClientProvider;
+        this.messageRouter = messageRouter;
     }
 
     @Override
@@ -111,7 +125,9 @@ public class ILinkServiceImpl implements ILinkService {
         stopping.set(false);
         ILinkClient activeClient = client;
 
-        System.out.println("已连接！发送“北京天气”可查天气，其他消息由 DeepSeek 回复 (按 Ctrl+C 停止)...\n");
+        System.out.println(
+                "已连接！支持文字聊天、天气查询、发送图片识别问题，以及自然语言文生图"
+                        + " (按 Ctrl+C 停止)...\n");
 
         try {
             while (!stopping.get()) {
@@ -146,26 +162,44 @@ public class ILinkServiceImpl implements ILinkService {
         }
         String userId = message.getFrom_user_id();
         String text = extractText(message);
-        if (userId == null || userId.isBlank() || text == null || text.isBlank()) {
+        MessageItem imageItem = firstImageItem(message);
+        if (userId == null || userId.isBlank()
+                || ((text == null || text.isBlank()) && imageItem == null)) {
             return;
         }
 
-        System.out.println("[" + userId + "] " + text);
+        String messageSummary = imageItem == null
+                ? text
+                : (text == null || text.isBlank() ? "[图片]" : "[图片] " + text);
+        System.out.println("[" + userId + "] " + messageSummary);
         boolean accepted = chatDispatcher.submit(
                 userId,
-                () -> replyToMessage(activeClient, userId, text));
+                () -> replyToMessage(activeClient, userId, text, imageItem));
         if (!accepted) {
             LOG.warn("聊天任务队列已满，拒绝用户消息: {}", userId);
         }
     }
 
-    private void replyToMessage(ILinkClient activeClient, String userId, String text) {
+    private void replyToMessage(
+            ILinkClient activeClient,
+            String userId,
+            String text,
+            MessageItem imageItem) {
         try {
-            String answer = processMessage(userId, text);
             if (stopping.get()) {
                 return;
             }
-            activeClient.sendText(userId, answer);
+            MessageRoute route = messageRouter.route(text, imageItem != null);
+            switch (route) {
+                case IMAGE_UNDERSTANDING ->
+                        replyWithImageUnderstanding(activeClient, userId, text, imageItem);
+                case IMAGE_GENERATION ->
+                        replyWithGeneratedImage(activeClient, userId, text);
+                case TEXT_CHAT -> {
+                    String answer = processMessage(userId, text);
+                    activeClient.sendText(userId, answer);
+                }
+            }
             System.out.println("  -> 已回复");
         } catch (CliException e) {
             LOG.warn("消息处理失败 [{}]: {}", e.getErrorCode(), e.getUserMessage());
@@ -178,6 +212,26 @@ public class ILinkServiceImpl implements ILinkService {
                 sendSafely(activeClient, userId, "服务暂时不可用，请稍后重试。");
             }
         }
+    }
+
+    private void replyWithImageUnderstanding(
+            ILinkClient activeClient,
+            String userId,
+            String question,
+            MessageItem imageItem) throws IOException {
+        byte[] imageBytes = activeClient.downloadImageFromMessageItem(imageItem);
+        String answer = imageUnderstandingClientProvider.getObject()
+                .analyze(imageBytes, detectImageMimeType(imageBytes), question);
+        activeClient.sendText(userId, answer);
+    }
+
+    private void replyWithGeneratedImage(
+            ILinkClient activeClient,
+            String userId,
+            String prompt) throws IOException {
+        GeneratedImage generated = imageGenerationClientProvider.getObject().generate(prompt);
+        // caption 传 null，保证一次文生图只发送一张图片，避免文字和图片形成两次回复。
+        activeClient.sendImage(userId, generated.data(), generated.fileName(), null);
     }
 
     private void sendSafely(ILinkClient activeClient, String userId, String text) {
@@ -212,6 +266,44 @@ public class ILinkServiceImpl implements ILinkService {
             }
         }
         return text.isEmpty() ? null : text.toString();
+    }
+
+    private MessageItem firstImageItem(WeixinMessage message) {
+        if (message.getItem_list() == null) {
+            return null;
+        }
+        for (MessageItem item : message.getItem_list()) {
+            if (item != null && item.getImage_item() != null
+                    && item.getImage_item().getMedia() != null) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private String detectImageMimeType(byte[] image) {
+        if (image.length >= 8
+                && image[0] == (byte) 0x89
+                && image[1] == 0x50
+                && image[2] == 0x4E
+                && image[3] == 0x47) {
+            return "image/png";
+        }
+        if (image.length >= 12
+                && image[0] == 'R'
+                && image[1] == 'I'
+                && image[2] == 'F'
+                && image[3] == 'F'
+                && image[8] == 'W'
+                && image[9] == 'E'
+                && image[10] == 'B'
+                && image[11] == 'P') {
+            return "image/webp";
+        }
+        if (image.length >= 2 && image[0] == 'B' && image[1] == 'M') {
+            return "image/bmp";
+        }
+        return "image/jpeg";
     }
 
     /** 智能消息处理: XX天气 → 查天气 | 管理命令/其他文本 → DeepSeek */
