@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: CLI-Toolbox
+  main:
+    banner-mode: "off"
+    log-startup-info: false
+    web-application-type: none
+  lifecycle:
+    timeout-per-shutdown-phase: 15s
+
+logging:
+  file:
+    name: work/app.log
+  level:
+    root: INFO
+
+app:
+  weather:
+    api-key: ${WEATHER_API_KEY:}
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY:}
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+    max-tokens: ${DEEPSEEK_MAX_TOKENS:1000}
+    timeout-seconds: ${DEEPSEEK_TIMEOUT_SECONDS:60}
+    thinking-enabled: ${DEEPSEEK_THINKING_ENABLED:false}
+    history-rounds: ${DEEPSEEK_HISTORY_ROUNDS:10}

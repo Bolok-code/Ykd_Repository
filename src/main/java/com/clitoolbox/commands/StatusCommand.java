@@ -1,10 +1,12 @@
 package com.clitoolbox.commands;
 
 import com.clitoolbox.config.AppConfig;
+import org.springframework.stereotype.Component;
 
 /**
  * status 命令 —— 显示程序运行状态（JVM、OS、uptime 等）
  */
+@Component
 public class StatusCommand implements Command {
 
     private static final long START_TIME = System.currentTimeMillis();

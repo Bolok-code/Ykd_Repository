@@ -19,6 +19,9 @@ Thumbs.db
 # Runtime
 work/
 *.log
+.env
+.env.*
+application-local.yml
 
 # Build
 *.class

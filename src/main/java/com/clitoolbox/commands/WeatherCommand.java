@@ -6,12 +6,22 @@ import com.clitoolbox.weather.WeatherResult;
 import com.clitoolbox.weather.WeatherService;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Component;
 
+@Component
+@Lazy
 public class WeatherCommand implements Command {
+    private final WeatherService weatherService;
+
+    public WeatherCommand(WeatherService weatherService) {
+        this.weatherService = weatherService;
+    }
+
     @Override
     public void run(String[] args) {
         String city = parseCityArg(args);
-        WeatherResult result = new WeatherService().query(city);
+        WeatherResult result = weatherService.query(city);
         printResult(result);
     }
 

@@ -1,10 +1,12 @@
 package com.clitoolbox.commands;
 
 import com.clitoolbox.config.AppConfig;
+import org.springframework.stereotype.Component;
 
 /**
  * help 命令 —— 显示程序帮助信息
  */
+@Component
 public class HelpCommand implements Command {
 
     @Override

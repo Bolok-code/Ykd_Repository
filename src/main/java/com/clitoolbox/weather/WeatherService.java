@@ -14,10 +14,16 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
 
+@Service
+@Lazy
 public class WeatherService {
-    private static final Logger LOG = Logger.getLogger(WeatherService.class.getName());
+    private static final Logger LOG = LoggerFactory.getLogger(WeatherService.class);
     private static final String API_KEY_ENV = "WEATHER_API_KEY";
     private static final String NOW_URL = "https://api.seniverse.com/v3/weather/now.json";
     private static final String DAILY_URL = "https://api.seniverse.com/v3/weather/daily.json";
@@ -26,11 +32,13 @@ public class WeatherService {
     private final ObjectMapper objectMapper;
     private final String apiKey;
 
-    public WeatherService() {
+    public WeatherService(
+            ObjectMapper objectMapper,
+            @Value("${app.weather.api-key:}") String apiKey) {
         this.httpClient = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
-        this.objectMapper = new ObjectMapper();
-        this.apiKey = System.getenv(API_KEY_ENV);
-        if (apiKey == null || apiKey.isBlank()) LOG.warning("环境变量 " + API_KEY_ENV + " 未设置");
+        this.objectMapper = objectMapper;
+        this.apiKey = apiKey;
+        if (apiKey == null || apiKey.isBlank()) LOG.warn("环境变量 {} 未设置", API_KEY_ENV);
     }
 
     public WeatherResult query(String city) {
@@ -38,7 +46,7 @@ public class WeatherService {
         if (apiKey == null || apiKey.isBlank()) throw new CliException(ErrorCode.CONFIG_ERROR,
                 "天气 API Key 未设置。\n  请注册心知天气 (https://www.seniverse.com/) 获取免费 Key，\n  然后设置环境变量: set WEATHER_API_KEY=你的Key");
 
-        LOG.info("查询天气 - 城市: " + city);
+        LOG.info("查询天气 - 城市: {}", city);
         try {
             String enc = URLEncoder.encode(city, StandardCharsets.UTF_8);
             String q = "?key=" + apiKey + "&location=" + enc + "&language=zh-Hans&unit=c";
@@ -75,15 +83,15 @@ public class WeatherService {
                 double dw = safeDouble(daily, "wind_speed", -1);
                 if (dw > 0) windSpeed = dw;
             } catch (Exception e) {
-                LOG.fine("每日预报数据不可用: " + e.getMessage());
+                LOG.debug("每日预报数据不可用: {}", e.getMessage());
             }
 
             WeatherResult wr = new WeatherResult(cityName, weatherDesc, temp, feelsLike,
                     humidity, windSpeed, updateTime, highTemp, lowTemp);
-            LOG.info("天气结果 - " + cityName + ": " + weatherDesc + ", " + temp + "C");
+            LOG.info("天气结果 - {}: {}, {}C", cityName, weatherDesc, temp);
             return wr;
 
-        } catch (CliException e) { LOG.severe("天气查询失败 - " + e.getUserMessage()); throw e;
+        } catch (CliException e) { LOG.error("天气查询失败 - {}", e.getUserMessage()); throw e;
         } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new CliException(ErrorCode.NETWORK_ERROR, "请求被中断。");
         } catch (IOException e) {
             String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
