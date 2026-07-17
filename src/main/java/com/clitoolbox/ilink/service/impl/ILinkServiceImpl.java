@@ -46,6 +46,15 @@ public class ILinkServiceImpl implements ILinkService {
     private static final Path WORK_DIR = Paths.get("work");
     private static final Path SESSION_FILE = WORK_DIR.resolve("ilink-session.json");
     private static final long RETRY_DELAY_MS = 2_000L;
+    private static final Pattern WEATHER_KEYWORD_PATTERN =
+            Pattern.compile("(天气|气温|多少度|温度)");
+    private static final Pattern WEATHER_QUERY_PREFIX_PATTERN = Pattern.compile(
+            "^(?:请问一下|请问|请|麻烦|劳驾|帮我|帮忙|给我|告诉我|"
+                    + "我想要?|想要?|查询一下|查一下|查询|查查|查|看看|看一下|了解一下)\\s*");
+    private static final Pattern WEATHER_LEADING_TIME_PATTERN =
+            Pattern.compile("^(?:今天|今日|现在|当前|明天|后天)\\s*");
+    private static final Pattern WEATHER_TRAILING_MODIFIER_PATTERN = Pattern.compile(
+            "\\s*(?:(?:今天|今日|现在|当前|明天|后天|实时)\\s*(?:的)?|的)\\s*$");
     private final PerUserTaskDispatcher chatDispatcher;
     private final ObjectMapper objectMapper;
     private final WeatherService weatherService;
@@ -331,12 +340,27 @@ public class ILinkServiceImpl implements ILinkService {
         }
     }
 
-    private String extractCity(String text) {
-        for (String p : new String[]{"(.+?)天气.*","(.+?)气温.*","(.+?)多少度.*","(.+?)温度.*"}) {
-            Matcher m = Pattern.compile(p).matcher(text);
-            if (m.matches()) return m.group(1).trim();
+    static String extractCity(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
         }
-        return null;
+
+        String normalized = text.trim();
+        Matcher weatherKeyword = WEATHER_KEYWORD_PATTERN.matcher(normalized);
+        if (!weatherKeyword.find()) {
+            return null;
+        }
+
+        String city = normalized.substring(0, weatherKeyword.start()).trim();
+        String previous;
+        do {
+            previous = city;
+            city = WEATHER_QUERY_PREFIX_PATTERN.matcher(city).replaceFirst("").trim();
+        } while (!city.isEmpty() && !city.equals(previous));
+
+        city = WEATHER_LEADING_TIME_PATTERN.matcher(city).replaceFirst("").trim();
+        city = WEATHER_TRAILING_MODIFIER_PATTERN.matcher(city).replaceFirst("").trim();
+        return city.isEmpty() ? null : city;
     }
 
     private String formatWeather(WeatherResult r) {
