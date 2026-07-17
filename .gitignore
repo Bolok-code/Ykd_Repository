@@ -22,6 +22,7 @@ work/
 .env
 .env.*
 application-local.yml
+/config/application-local.yml
 
 # Build
 *.class
