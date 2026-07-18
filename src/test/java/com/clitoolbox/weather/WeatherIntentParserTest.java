@@ -62,6 +62,8 @@ class WeatherIntentParserTest {
 
     @Test
     void ignoresDeclarativeSentencesThatOnlyMentionWeather() {
+        assertNull(parser.parse("今天天气好好啊"));
+        assertNull(parser.parse("杭州今天天气好好啊"));
         assertNull(parser.parse("今天去杭州玩了，天气真好"));
         assertNull(parser.parse("今天去杭州玩了天气真好"));
         assertNull(parser.parse("杭州天气真好"));
