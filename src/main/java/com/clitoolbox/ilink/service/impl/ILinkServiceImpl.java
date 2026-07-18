@@ -217,7 +217,7 @@ public class ILinkServiceImpl implements ILinkService {
                     activeClient.sendText(userId, answer);
                 }
             }
-            System.out.println("  -> 已回复");
+            System.out.println("  -> 消息处理完成");
         } catch (CliException e) {
             LOG.warn("消息处理失败 [{}]: {}", e.getErrorCode(), e.getUserMessage());
             if (!stopping.get()) {
@@ -259,19 +259,20 @@ public class ILinkServiceImpl implements ILinkService {
         try {
             GeneratedSpeech speech =
                     speechSynthesisClientProvider.getObject().synthesize(answer);
-            activeClient.sendVoice(
+            activeClient.sendFile(
                     userId,
                     speech.data(),
                     speech.fileName(),
-                    speech.playTimeMs(),
-                    speech.sampleRate(),
-                    null,
-                    speech.encodeType(),
-                    speech.bitsPerSample(),
                     null);
+            LOG.info(
+                    "MP3 语音文件已提交给 iLink - userId={}, bytes={}, durationMs={}",
+                    userId,
+                    speech.data().length,
+                    speech.playTimeMs());
         } catch (CliException | IOException e) {
             LOG.warn("语音回复失败，将回退为文字消息: {}", e.getMessage());
             activeClient.sendText(userId, answer);
+            LOG.info("已发送文字降级回复 - userId={}", userId);
         }
     }
 

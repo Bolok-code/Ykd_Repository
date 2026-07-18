@@ -18,13 +18,17 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 /**
- * 调用百炼 Qwen-Audio-TTS 非实时接口，将文字合成为 16 位单声道 PCM。
+ * 调用百炼 Qwen-Audio-TTS 非实时接口，将文字合成为 MP3 语音。
  */
 public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient {
-    static final int PCM_ENCODE_TYPE = 1;
-    static final int PCM_BITS_PER_SAMPLE = 16;
-    private static final int PCM_CHANNELS = 1;
+    static final int MP3_ENCODE_TYPE = 7;
+    static final int AUDIO_BITS_PER_SAMPLE = 16;
     private static final int MAX_TEXT_CHARS = 5_000;
+    private static final int[] MPEG_1_LAYER_3_BITRATES =
+            {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0};
+    private static final int[] MPEG_2_LAYER_3_BITRATES =
+            {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0};
+    private static final int[] MPEG_1_SAMPLE_RATES = {44_100, 48_000, 32_000};
 
     private final BailianTtsConfig config;
     private final RestClient synthesisClient;
@@ -89,7 +93,7 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
                 "input", Map.of(
                         "text", normalizedText,
                         "voice", config.voice(),
-                        "format", "pcm",
+                        "format", "mp3",
                         "sample_rate", config.sampleRate()));
 
         try {
@@ -147,14 +151,32 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
                         : "百炼语音合成失败：" + message);
     }
 
-    static int calculatePcmPlayTimeMs(int byteLength, int sampleRate) {
-        if (byteLength <= 0 || sampleRate <= 0) {
-            throw new CliException(ErrorCode.UNKNOWN, "百炼返回的 PCM 音频信息不完整。");
+    static int calculateMp3PlayTimeMs(byte[] audio) {
+        if (audio == null || audio.length < 4) {
+            throw new CliException(ErrorCode.UNKNOWN, "百炼返回的 MP3 音频信息不完整。");
         }
-        long bytesPerSecond =
-                (long) sampleRate * PCM_CHANNELS * PCM_BITS_PER_SAMPLE / 8;
-        long playTimeMs = Math.max(1L, byteLength * 1_000L / bytesPerSecond);
-        return Math.toIntExact(playTimeMs);
+
+        int position = skipId3v2Tag(audio);
+        long durationMicros = 0L;
+        int frameCount = 0;
+        while (position + 4 <= audio.length) {
+            Mp3Frame frame = parseMp3Frame(audio, position);
+            if (frame == null) {
+                position++;
+                continue;
+            }
+            if (position + frame.length() > audio.length) {
+                break;
+            }
+            durationMicros +=
+                    frame.samplesPerFrame() * 1_000_000L / frame.sampleRate();
+            frameCount++;
+            position += frame.length();
+        }
+        if (frameCount == 0) {
+            throw new CliException(ErrorCode.UNKNOWN, "无法解析百炼返回的 MP3 音频时长。");
+        }
+        return Math.toIntExact(Math.max(1L, durationMicros / 1_000L));
     }
 
     private GeneratedSpeech downloadGeneratedSpeech(URI audioUri) {
@@ -166,14 +188,14 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
         if (bytes == null || bytes.length == 0) {
             throw new CliException(ErrorCode.UNKNOWN, "百炼生成的语音下载失败。");
         }
-        int playTimeMs = calculatePcmPlayTimeMs(bytes.length, config.sampleRate());
+        int playTimeMs = calculateMp3PlayTimeMs(bytes);
         return new GeneratedSpeech(
                 bytes,
-                "bailian-reply.pcm",
+                "bailian-reply.mp3",
                 playTimeMs,
                 config.sampleRate(),
-                PCM_ENCODE_TYPE,
-                PCM_BITS_PER_SAMPLE);
+                MP3_ENCODE_TYPE,
+                AUDIO_BITS_PER_SAMPLE);
     }
 
     private static String validateText(String text) {
@@ -212,5 +234,68 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
         } catch (URISyntaxException e) {
             throw new CliException(ErrorCode.UNKNOWN, "百炼返回的语音地址格式不正确。", e);
         }
+    }
+
+    private static int skipId3v2Tag(byte[] audio) {
+        if (audio.length < 10
+                || audio[0] != 'I'
+                || audio[1] != 'D'
+                || audio[2] != '3') {
+            return 0;
+        }
+        int size = ((audio[6] & 0x7F) << 21)
+                | ((audio[7] & 0x7F) << 14)
+                | ((audio[8] & 0x7F) << 7)
+                | (audio[9] & 0x7F);
+        int footerLength = (audio[5] & 0x10) == 0 ? 0 : 10;
+        return Math.min(audio.length, 10 + size + footerLength);
+    }
+
+    private static Mp3Frame parseMp3Frame(byte[] audio, int position) {
+        int header = ((audio[position] & 0xFF) << 24)
+                | ((audio[position + 1] & 0xFF) << 16)
+                | ((audio[position + 2] & 0xFF) << 8)
+                | (audio[position + 3] & 0xFF);
+        if ((header & 0xFFE00000) != 0xFFE00000) {
+            return null;
+        }
+
+        int versionBits = (header >>> 19) & 0x3;
+        int layerBits = (header >>> 17) & 0x3;
+        int bitrateIndex = (header >>> 12) & 0xF;
+        int sampleRateIndex = (header >>> 10) & 0x3;
+        int padding = (header >>> 9) & 0x1;
+        if (versionBits == 1
+                || layerBits != 1
+                || bitrateIndex == 0
+                || bitrateIndex == 15
+                || sampleRateIndex == 3) {
+            return null;
+        }
+
+        boolean mpeg1 = versionBits == 3;
+        int bitrateKbps = (mpeg1
+                ? MPEG_1_LAYER_3_BITRATES
+                : MPEG_2_LAYER_3_BITRATES)[bitrateIndex];
+        int sampleRate = MPEG_1_SAMPLE_RATES[sampleRateIndex];
+        if (versionBits == 2) {
+            sampleRate /= 2;
+        } else if (versionBits == 0) {
+            sampleRate /= 4;
+        }
+
+        int coefficient = mpeg1 ? 144 : 72;
+        int frameLength =
+                coefficient * bitrateKbps * 1_000 / sampleRate + padding;
+        int samplesPerFrame = mpeg1 ? 1_152 : 576;
+        return frameLength > 4
+                ? new Mp3Frame(frameLength, sampleRate, samplesPerFrame)
+                : null;
+    }
+
+    private record Mp3Frame(
+            int length,
+            int sampleRate,
+            int samplesPerFrame) {
     }
 }

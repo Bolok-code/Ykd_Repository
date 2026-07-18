@@ -48,13 +48,26 @@ class BailianSpeechSynthesisClientTest {
     }
 
     @Test
-    void calculatesMonoSixteenBitPcmDuration() {
-        int oneSecondAt16Khz = 16_000 * 2;
+    void calculatesMpeg2Layer3Duration() {
+        int frameCount = 10;
+        int frameLength = 144;
+        byte[] mp3 = new byte[frameCount * frameLength];
+        int header = 0xFFE00000
+                | (2 << 19)
+                | (1 << 17)
+                | (1 << 16)
+                | (4 << 12)
+                | (2 << 10);
+        for (int frame = 0; frame < frameCount; frame++) {
+            int offset = frame * frameLength;
+            mp3[offset] = (byte) (header >>> 24);
+            mp3[offset + 1] = (byte) (header >>> 16);
+            mp3[offset + 2] = (byte) (header >>> 8);
+            mp3[offset + 3] = (byte) header;
+        }
 
         assertEquals(
-                1_000,
-                BailianSpeechSynthesisClient.calculatePcmPlayTimeMs(
-                        oneSecondAt16Khz,
-                        16_000));
+                360,
+                BailianSpeechSynthesisClient.calculateMp3PlayTimeMs(mp3));
     }
 }
