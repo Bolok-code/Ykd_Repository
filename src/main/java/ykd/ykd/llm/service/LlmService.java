@@ -1,5 +1,7 @@
 package ykd.ykd.llm.service;
 
+import org.springframework.ai.chat.client.ChatClient;
+
 public interface LlmService {
-    String chat(String content);
+    String chat(String text, String imageUrl, ChatClient client);
 }

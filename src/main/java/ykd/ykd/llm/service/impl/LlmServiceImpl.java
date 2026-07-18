@@ -1,46 +1,58 @@
 package ykd.ykd.llm.service.impl;
+
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
+import org.springframework.util.MimeTypeUtils;
 import lombok.extern.slf4j.Slf4j;
-import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.llm.service.LlmService;
-import ykd.ykd.weather.service.WeatherService;
+import ykd.ykd.llm.tools.ImageTools;
+import ykd.ykd.llm.tools.WeatherTools;
+
+import java.net.URI;
 
 @Slf4j
 @Service
 public class LlmServiceImpl implements LlmService {
 
-    private final ChatClient chatClient;
-    private final WeatherService weatherService;
+    private final WeatherTools weatherTools;
+    private final ImageTools imageTools;
 
-    public LlmServiceImpl(ChatClient.Builder builder, WeatherService weatherService) {
-        this.chatClient = builder.build();
-        this.weatherService = weatherService;
+    public LlmServiceImpl(WeatherTools weatherTools, ImageTools imageTools) {
+        this.weatherTools = weatherTools;
+        this.imageTools = imageTools;
     }
-
-    @Tool(description = "查询指定城市的实时天气")
-    public String getWeather(@ToolParam(description = "中文城市名，如 北京、上海") String city) {
-        log.info("AI调用天气工具: city={}", city);
-        try {
-            return weatherService.getWeatherText(city);
-        } catch (Exception e) {
-            log.error("天气工具异常: city={}", city, e);
-            return ErrorCode.AI_WEATHER_FAILED.getDefaultMessage();
-        }
-    }
-
-
 
     @Override
-    public String chat(String content) {
-        log.info("AI请求: {}", content);
-        return chatClient.prompt()
-//                .system("你是微信聊天助手，你的人格是一个温柔知性的大姐姐")
-                .user(content)
-                .tools(this)
-                .call()
-                .content();
+    public String chat(String text, String imageUrl, ChatClient client) {
+        long start = System.currentTimeMillis();
+        if ((text == null || text.isBlank()) && imageUrl != null) {
+            text = "请描述这张图片";
+        }
+        String finalText = text;
+        String textPreview = finalText != null ? (finalText.length() > 100 ? finalText.substring(0, 100) + "..." : finalText) : null;
+        log.info("[LLM] 请求开始: text={}, hasImage={}", textPreview, imageUrl != null);
+        try {
+            String content = client.prompt()
+                    .user(userSpec -> {
+                        if (finalText != null && !finalText.isBlank()) {
+                            userSpec.text(finalText);
+                        }
+                        if (imageUrl != null) {
+                            userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
+                        }
+                    })
+                    .tools(weatherTools, imageTools)
+                    .call()
+                    .content();
+            long elapsed = System.currentTimeMillis() - start;
+            String replyPreview = content != null ? (content.length() > 200 ? content.substring(0, 200) + "..." : content) : null;
+            log.info("[LLM] 请求完成: elapsed={}ms, reply={}", elapsed, replyPreview);
+            return content;
+        } catch (Exception e) {
+            long elapsed = System.currentTimeMillis() - start;
+            log.error("[LLM] 请求异常: elapsed={}ms, text={}, error={}", elapsed, textPreview, e.getMessage(), e);
+            throw e;
+        }
     }
 }
