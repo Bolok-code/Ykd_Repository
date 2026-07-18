@@ -19,13 +19,17 @@ for /f "tokens=1 delims=." %%M in ("%JAVA_VERSION%") do set "JAVA_MAJOR=%%M"
 if not defined JAVA_MAJOR goto java_error
 if %JAVA_MAJOR% LSS 21 goto java_error
 
-set "TARGET=%~dp0target\cli-toolbox-0.1.0.jar"
+pushd "%~dp0"
+set "TARGET=%CD%\target\cli-toolbox-0.1.0.jar"
 if not exist "%TARGET%" (
     echo [错误] 尚未找到可执行 Jar，请先运行 mvn clean package。
+    popd
     exit /b 1
 )
 "%JAVA_EXE%" -jar "%TARGET%" %*
-exit /b %errorlevel%
+set "APP_EXIT_CODE=%errorlevel%"
+popd
+exit /b %APP_EXIT_CODE%
 
 :java_error
 echo [错误] 本项目需要 JDK 21 或更高版本。

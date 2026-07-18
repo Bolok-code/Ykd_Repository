@@ -17,6 +17,9 @@ logging:
     root: INFO
 
 app:
+  ilink:
+    voice:
+      send-file-copy-after-native: ${ILINK_VOICE_SEND_FILE_COPY:true}
   weather:
     api-key: ${WEATHER_API_KEY:}
   deepseek:
@@ -38,5 +41,11 @@ app:
     tts:
       model: ${BAILIAN_TTS_MODEL:qwen-audio-3.0-tts-flash}
       voice: ${BAILIAN_TTS_VOICE:longanhuan_v3.6}
-      sample-rate: ${BAILIAN_TTS_SAMPLE_RATE:16000}
+      sample-rate: ${BAILIAN_TTS_SAMPLE_RATE:24000}
       timeout-seconds: ${BAILIAN_TTS_TIMEOUT_SECONDS:180}
+      silk:
+        enabled: ${SILK_ENCODER_ENABLED:true}
+        node-command: ${SILK_NODE_COMMAND:node}
+        script-path: ${SILK_ENCODER_SCRIPT:tools/silk-encoder/encode.mjs}
+        work-directory: ${SILK_ENCODER_WORK_DIR:work/silk}
+        timeout-seconds: ${SILK_ENCODER_TIMEOUT_SECONDS:30}

@@ -1,0 +1,12 @@
+{
+  "name": "cli-toolbox-silk-encoder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test encode.test.mjs"
+  },
+  "dependencies": {
+    "silk-wasm": "3.7.1"
+  }
+}

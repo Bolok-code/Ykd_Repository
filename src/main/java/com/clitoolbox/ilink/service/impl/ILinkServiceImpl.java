@@ -3,8 +3,11 @@ package com.clitoolbox.ilink.service.impl;
 import com.clitoolbox.ai.image.GeneratedImage;
 import com.clitoolbox.ai.image.ImageGenerationClient;
 import com.clitoolbox.ai.speech.GeneratedSpeech;
+import com.clitoolbox.ai.speech.PcmAudio;
+import com.clitoolbox.ai.speech.SpeechEncoder;
 import com.clitoolbox.ai.speech.SpeechSynthesisClient;
 import com.clitoolbox.ai.vision.ImageUnderstandingClient;
+import com.clitoolbox.config.VoiceReplyProperties;
 import com.clitoolbox.conversation.ChatService;
 import com.clitoolbox.conversation.PerUserTaskDispatcher;
 import com.clitoolbox.exception.CliException;
@@ -60,6 +63,8 @@ public class ILinkServiceImpl implements ILinkService {
     private final ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider;
     private final ObjectProvider<ImageGenerationClient> imageGenerationClientProvider;
     private final ObjectProvider<SpeechSynthesisClient> speechSynthesisClientProvider;
+    private final ObjectProvider<SpeechEncoder> speechEncoderProvider;
+    private final VoiceReplyProperties voiceReplyProperties;
     private final ILinkMessageRouter messageRouter;
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private volatile ILinkClient client;
@@ -73,6 +78,8 @@ public class ILinkServiceImpl implements ILinkService {
             ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider,
             ObjectProvider<ImageGenerationClient> imageGenerationClientProvider,
             ObjectProvider<SpeechSynthesisClient> speechSynthesisClientProvider,
+            ObjectProvider<SpeechEncoder> speechEncoderProvider,
+            VoiceReplyProperties voiceReplyProperties,
             ILinkMessageRouter messageRouter) {
         this.chatDispatcher = chatDispatcher;
         this.objectMapper = objectMapper;
@@ -82,6 +89,8 @@ public class ILinkServiceImpl implements ILinkService {
         this.imageUnderstandingClientProvider = imageUnderstandingClientProvider;
         this.imageGenerationClientProvider = imageGenerationClientProvider;
         this.speechSynthesisClientProvider = speechSynthesisClientProvider;
+        this.speechEncoderProvider = speechEncoderProvider;
+        this.voiceReplyProperties = voiceReplyProperties;
         this.messageRouter = messageRouter;
     }
 
@@ -256,21 +265,73 @@ public class ILinkServiceImpl implements ILinkService {
             String userId,
             String question) throws IOException {
         String answer = processMessage(userId, question);
+        GeneratedSpeech pcm;
         try {
-            GeneratedSpeech speech =
-                    speechSynthesisClientProvider.getObject().synthesize(answer);
+            pcm = speechSynthesisClientProvider.getObject().synthesize(answer);
+        } catch (CliException e) {
+            LOG.warn("语音合成失败，将回退为文字消息: {}", e.getMessage());
+            activeClient.sendText(userId, answer);
+            LOG.info("已发送文字降级回复 - userId={}", userId);
+            return;
+        }
+
+        try {
+            SpeechEncoder encoder = speechEncoderProvider.getIfAvailable();
+            if (encoder == null) {
+                throw new CliException(
+                        ErrorCode.CONFIG_ERROR,
+                        "SILK 编码器未启用。");
+            }
+            GeneratedSpeech silk = encoder.encode(pcm);
+            activeClient.sendVoice(
+                    userId,
+                    silk.data(),
+                    silk.fileName(),
+                    silk.playTimeMs(),
+                    silk.sampleRate(),
+                    null,
+                    silk.encodeType(),
+                    silk.bitsPerSample(),
+                    answer);
+            LOG.info(
+                    "SILK 语音气泡已提交给 iLink - userId={}, bytes={}, durationMs={}, "
+                            + "sampleRate={}, encodeType={}",
+                    userId,
+                    silk.data().length,
+                    silk.playTimeMs(),
+                    silk.sampleRate(),
+                    silk.encodeType());
+        } catch (CliException | IOException e) {
+            LOG.warn("SILK 语音气泡发送失败，将回退为 WAV 文件: {}", e.getMessage());
+            sendVoiceFileFallback(activeClient, userId, answer, pcm);
+            return;
+        }
+
+        if (voiceReplyProperties.sendFileCopyAfterNative()) {
+            LOG.info("iLink 无设备投递回执，按配置追加 WAV 语音文件 - userId={}", userId);
+            sendVoiceFileFallback(activeClient, userId, answer, pcm);
+        }
+    }
+
+    private void sendVoiceFileFallback(
+            ILinkClient activeClient,
+            String userId,
+            String answer,
+            GeneratedSpeech pcm) throws IOException {
+        try {
+            GeneratedSpeech wav = PcmAudio.asWav(pcm);
             activeClient.sendFile(
                     userId,
-                    speech.data(),
-                    speech.fileName(),
+                    wav.data(),
+                    wav.fileName(),
                     null);
             LOG.info(
-                    "MP3 语音文件已提交给 iLink - userId={}, bytes={}, durationMs={}",
+                    "WAV 语音文件已提交给 iLink - userId={}, bytes={}, durationMs={}",
                     userId,
-                    speech.data().length,
-                    speech.playTimeMs());
+                    wav.data().length,
+                    wav.playTimeMs());
         } catch (CliException | IOException e) {
-            LOG.warn("语音回复失败，将回退为文字消息: {}", e.getMessage());
+            LOG.warn("WAV 语音文件发送失败，将回退为文字消息: {}", e.getMessage());
             activeClient.sendText(userId, answer);
             LOG.info("已发送文字降级回复 - userId={}", userId);
         }

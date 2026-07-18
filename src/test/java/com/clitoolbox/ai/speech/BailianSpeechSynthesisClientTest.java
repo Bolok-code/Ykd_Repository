@@ -2,11 +2,16 @@ package com.clitoolbox.ai.speech;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.clitoolbox.exception.CliException;
+import com.clitoolbox.exception.ErrorCode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.client.RestClientResponseException;
 
 class BailianSpeechSynthesisClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -17,7 +22,7 @@ class BailianSpeechSynthesisClientTest {
                 {
                   "output": {
                     "audio": {
-                      "url": "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/reply.pcm?Expires=1"
+                      "url": "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/reply.pcm?Expires=1&Signature=a%2Bb%2Fc%3D&OSSAccessKeyId=test"
                     }
                   }
                 }
@@ -26,7 +31,7 @@ class BailianSpeechSynthesisClientTest {
         URI result = BailianSpeechSynthesisClient.extractAudioUri(response);
 
         assertEquals(
-                "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/reply.pcm?Expires=1",
+                "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/reply.pcm?Expires=1&Signature=a%2Bb%2Fc%3D&OSSAccessKeyId=test",
                 result.toString());
     }
 
@@ -48,26 +53,118 @@ class BailianSpeechSynthesisClientTest {
     }
 
     @Test
-    void calculatesMpeg2Layer3Duration() {
-        int frameCount = 10;
-        int frameLength = 144;
-        byte[] mp3 = new byte[frameCount * frameLength];
-        int header = 0xFFE00000
-                | (2 << 19)
-                | (1 << 17)
-                | (1 << 16)
-                | (4 << 12)
-                | (2 << 10);
-        for (int frame = 0; frame < frameCount; frame++) {
-            int offset = frame * frameLength;
-            mp3[offset] = (byte) (header >>> 24);
-            mp3[offset + 1] = (byte) (header >>> 16);
-            mp3[offset + 2] = (byte) (header >>> 8);
-            mp3[offset + 3] = (byte) header;
-        }
+    void calculatesMonoSixteenBitPcmDuration() {
+        int oneSecondAt24Khz = 24_000 * 2;
 
         assertEquals(
-                360,
-                BailianSpeechSynthesisClient.calculateMp3PlayTimeMs(mp3));
+                1_000,
+                BailianSpeechSynthesisClient.calculatePcmPlayTimeMs(
+                        oneSecondAt24Khz,
+                        24_000));
+    }
+
+    @Test
+    void parsesDashScopeErrorDetails() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-DashScope-Request-Id", "request-from-header");
+        RestClientResponseException responseException = responseException(
+                429,
+                """
+                {
+                  "code": "Throttling.RateQuota",
+                  "message": "Requests rate limit exceeded",
+                  "request_id": "request-from-body"
+                }
+                """,
+                headers);
+
+        var error =
+                BailianSpeechSynthesisClient.parseApiError(responseException);
+
+        assertEquals("Throttling.RateQuota", error.code());
+        assertEquals("Requests rate limit exceeded", error.message());
+        assertEquals("request-from-body", error.requestId());
+    }
+
+    @Test
+    void parsesOssXmlSignatureErrorAndMapsDownloadFailure() {
+        RestClientResponseException responseException = responseException(
+                403,
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Error>
+                  <Code>SignatureDoesNotMatch</Code>
+                  <Message>The request signature does not match.</Message>
+                  <RequestId>oss-request-id</RequestId>
+                </Error>
+                """,
+                HttpHeaders.EMPTY);
+
+        var apiError =
+                BailianSpeechSynthesisClient.parseApiError(responseException);
+        CliException result = BailianSpeechSynthesisClient.mapResponseError(
+                "下载合成结果",
+                responseException,
+                apiError);
+
+        assertEquals("SignatureDoesNotMatch", apiError.code());
+        assertEquals("oss-request-id", apiError.requestId());
+        assertEquals(ErrorCode.NETWORK_ERROR, result.getErrorCode());
+        assertTrue(result.getUserMessage().contains("OSS 签名不匹配"));
+    }
+
+    @Test
+    void mapsAllocationQuotaToSpecificConfigurationError() {
+        RestClientResponseException responseException = responseException(
+                429,
+                """
+                {
+                  "code": "Throttling.AllocationQuota",
+                  "message": "Allocated quota exceeded",
+                  "request_id": "quota-request"
+                }
+                """,
+                HttpHeaders.EMPTY);
+
+        CliException result = BailianSpeechSynthesisClient.mapResponseError(
+                "提交合成任务",
+                responseException,
+                BailianSpeechSynthesisClient.parseApiError(responseException));
+
+        assertEquals(ErrorCode.CONFIG_ERROR, result.getErrorCode());
+        assertTrue(result.getUserMessage().contains("额度或分配配额不足"));
+        assertTrue(result.getUserMessage().contains("quota-request"));
+    }
+
+    @Test
+    void mapsInvalidApiKeyToSpecificError() {
+        RestClientResponseException responseException = responseException(
+                401,
+                """
+                {"code":"InvalidApiKey","message":"Invalid API-key provided."}
+                """,
+                HttpHeaders.EMPTY);
+
+        CliException result = BailianSpeechSynthesisClient.mapResponseError(
+                "提交合成任务",
+                responseException,
+                BailianSpeechSynthesisClient.parseApiError(responseException));
+
+        assertEquals(ErrorCode.CONFIG_ERROR, result.getErrorCode());
+        assertTrue(result.getUserMessage().contains("API Key 无效"));
+        assertTrue(result.getUserMessage().contains("HTTP 401"));
+    }
+
+    private static RestClientResponseException responseException(
+            int status,
+            String body,
+            HttpHeaders headers) {
+        return new RestClientResponseException(
+                "test",
+                status,
+                "test",
+                headers,
+                body.getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
     }
 }
