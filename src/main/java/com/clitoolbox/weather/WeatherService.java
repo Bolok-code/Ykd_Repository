@@ -11,11 +11,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -28,23 +32,37 @@ public class WeatherService {
     private static final String NOW_URL = "https://api.seniverse.com/v3/weather/now.json";
     private static final String DAILY_URL = "https://api.seniverse.com/v3/weather/daily.json";
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    private static final int MAX_FORECAST_OFFSET_DAYS = 14;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final String apiKey;
+    private final Clock clock;
 
+    @Autowired
     public WeatherService(
             ObjectMapper objectMapper,
             @Value("${app.weather.api-key:}") String apiKey) {
-        this.httpClient = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
+        this(
+                objectMapper,
+                apiKey,
+                HttpClient.newBuilder().connectTimeout(TIMEOUT).build(),
+                Clock.system(WeatherIntentParser.WEATHER_ZONE));
+    }
+
+    WeatherService(
+            ObjectMapper objectMapper,
+            String apiKey,
+            HttpClient httpClient,
+            Clock clock) {
         this.objectMapper = objectMapper;
         this.apiKey = apiKey;
+        this.httpClient = httpClient;
+        this.clock = clock;
         if (apiKey == null || apiKey.isBlank()) LOG.warn("环境变量 {} 未设置", API_KEY_ENV);
     }
 
     public WeatherResult query(String city) {
-        if (city == null || city.isBlank()) throw new CliException(ErrorCode.INVALID_INPUT, "城市名不能为空。");
-        if (apiKey == null || apiKey.isBlank()) throw new CliException(ErrorCode.CONFIG_ERROR,
-                "天气 API Key 未设置。\n  请注册心知天气 (https://www.seniverse.com/) 获取免费 Key，\n  然后设置环境变量: set WEATHER_API_KEY=你的Key");
+        validateCityAndApiKey(city);
 
         LOG.info("查询天气 - 城市: {}", city);
         try {
@@ -100,6 +118,95 @@ public class WeatherService {
             throw new CliException(ErrorCode.NETWORK_ERROR, "网络请求失败，请检查网络连接。");
         } catch (Exception e) {
             throw new CliException(ErrorCode.UNKNOWN, "天气查询失败: " + e.getMessage());
+        }
+    }
+
+    public WeatherForecastResult forecast(String city, LocalDate targetDate) {
+        validateCityAndApiKey(city);
+        if (targetDate == null) {
+            throw new CliException(ErrorCode.INVALID_INPUT, "天气预报日期不能为空。");
+        }
+
+        LocalDate today = LocalDate.now(clock);
+        long offsetDays = ChronoUnit.DAYS.between(today, targetDate);
+        if (offsetDays < 0) {
+            throw new CliException(ErrorCode.INVALID_INPUT, "暂不支持查询已经过去的天气。");
+        }
+        if (offsetDays > MAX_FORECAST_OFFSET_DAYS) {
+            throw new CliException(
+                    ErrorCode.INVALID_INPUT,
+                    "当前只能查询未来 15 天内的天气预报，且实际天数取决于天气 API 套餐。");
+        }
+
+        LOG.info("查询天气预报 - 城市: {}, 日期: {}", city, targetDate);
+        try {
+            String enc = URLEncoder.encode(city, StandardCharsets.UTF_8);
+            String q = "?key=" + apiKey + "&location=" + enc + "&language=zh-Hans&unit=c";
+            int requestedDays = Math.toIntExact(offsetDays) + 1;
+            String dailyBody = httpGet(
+                    DAILY_URL + q + "&start=0&days=" + requestedDays);
+            JsonNode root = objectMapper.readTree(dailyBody);
+            checkError(root);
+
+            JsonNode result = root.path("results").path(0);
+            JsonNode matchedForecast = null;
+            for (JsonNode daily : result.path("daily")) {
+                if (targetDate.toString().equals(safeText(daily, "date", ""))) {
+                    matchedForecast = daily;
+                    break;
+                }
+            }
+            if (matchedForecast == null) {
+                throw new CliException(
+                        ErrorCode.INVALID_INPUT,
+                        "天气服务没有返回 " + targetDate
+                                + " 的预报，当前套餐可能不支持这么远的日期。");
+            }
+
+            String cityName = result.path("location").path("name").asText(city);
+            WeatherForecastResult forecast = new WeatherForecastResult(
+                    cityName,
+                    targetDate,
+                    safeText(matchedForecast, "text_day", "未知"),
+                    safeText(matchedForecast, "text_night", "未知"),
+                    safeDouble(matchedForecast, "high", 0),
+                    safeDouble(matchedForecast, "low", 0),
+                    safeInt(matchedForecast, "humidity", 0),
+                    safeDouble(matchedForecast, "wind_speed", 0),
+                    parseTime(result.path("last_update").asText(null)));
+            LOG.info(
+                    "天气预报结果 - {} {}: {} / {}",
+                    cityName,
+                    targetDate,
+                    forecast.dayDescription(),
+                    forecast.nightDescription());
+            return forecast;
+        } catch (CliException e) {
+            LOG.error("天气预报查询失败 - {}", e.getUserMessage());
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new CliException(ErrorCode.NETWORK_ERROR, "请求被中断。");
+        } catch (IOException e) {
+            String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+            if (message.contains("timeout") || message.contains("timed out")) {
+                throw new CliException(ErrorCode.NETWORK_ERROR, "天气服务连接超时，请稍后重试。");
+            }
+            throw new CliException(ErrorCode.NETWORK_ERROR, "网络请求失败，请检查网络连接。");
+        } catch (Exception e) {
+            throw new CliException(ErrorCode.UNKNOWN, "天气预报查询失败: " + e.getMessage());
+        }
+    }
+
+    private void validateCityAndApiKey(String city) {
+        if (city == null || city.isBlank()) {
+            throw new CliException(ErrorCode.INVALID_INPUT, "城市名不能为空。");
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new CliException(
+                    ErrorCode.CONFIG_ERROR,
+                    "天气 API Key 未设置。\n  请注册心知天气 (https://www.seniverse.com/) 获取免费 Key，\n"
+                            + "  然后设置环境变量: set WEATHER_API_KEY=你的Key");
         }
     }
 

@@ -10,6 +10,9 @@ import com.clitoolbox.exception.ErrorCode;
 import com.clitoolbox.ilink.router.ILinkMessageRouter;
 import com.clitoolbox.ilink.router.ILinkMessageRouter.MessageRoute;
 import com.clitoolbox.ilink.service.ILinkService;
+import com.clitoolbox.weather.WeatherForecastResult;
+import com.clitoolbox.weather.WeatherIntent;
+import com.clitoolbox.weather.WeatherIntentParser;
 import com.clitoolbox.weather.WeatherResult;
 import com.clitoolbox.weather.WeatherService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,12 +30,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -46,18 +50,10 @@ public class ILinkServiceImpl implements ILinkService {
     private static final Path WORK_DIR = Paths.get("work");
     private static final Path SESSION_FILE = WORK_DIR.resolve("ilink-session.json");
     private static final long RETRY_DELAY_MS = 2_000L;
-    private static final Pattern WEATHER_KEYWORD_PATTERN =
-            Pattern.compile("(天气|气温|多少度|温度)");
-    private static final Pattern WEATHER_QUERY_PREFIX_PATTERN = Pattern.compile(
-            "^(?:请问一下|请问|请|麻烦|劳驾|帮我|帮忙|给我|告诉我|"
-                    + "我想要?|想要?|查询一下|查一下|查询|查查|查|看看|看一下|了解一下)\\s*");
-    private static final Pattern WEATHER_LEADING_TIME_PATTERN =
-            Pattern.compile("^(?:今天|今日|现在|当前|明天|后天)\\s*");
-    private static final Pattern WEATHER_TRAILING_MODIFIER_PATTERN = Pattern.compile(
-            "\\s*(?:(?:今天|今日|现在|当前|明天|后天|实时)\\s*(?:的)?|的)\\s*$");
     private final PerUserTaskDispatcher chatDispatcher;
     private final ObjectMapper objectMapper;
     private final WeatherService weatherService;
+    private final WeatherIntentParser weatherIntentParser;
     private final ObjectProvider<ChatService> chatServiceProvider;
     private final ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider;
     private final ObjectProvider<ImageGenerationClient> imageGenerationClientProvider;
@@ -69,6 +65,7 @@ public class ILinkServiceImpl implements ILinkService {
             PerUserTaskDispatcher chatDispatcher,
             ObjectMapper objectMapper,
             WeatherService weatherService,
+            WeatherIntentParser weatherIntentParser,
             ObjectProvider<ChatService> chatServiceProvider,
             ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider,
             ObjectProvider<ImageGenerationClient> imageGenerationClientProvider,
@@ -76,6 +73,7 @@ public class ILinkServiceImpl implements ILinkService {
         this.chatDispatcher = chatDispatcher;
         this.objectMapper = objectMapper;
         this.weatherService = weatherService;
+        this.weatherIntentParser = weatherIntentParser;
         this.chatServiceProvider = chatServiceProvider;
         this.imageUnderstandingClientProvider = imageUnderstandingClientProvider;
         this.imageGenerationClientProvider = imageGenerationClientProvider;
@@ -135,7 +133,7 @@ public class ILinkServiceImpl implements ILinkService {
         ILinkClient activeClient = client;
 
         System.out.println(
-                "已连接！支持文字聊天、天气查询、发送图片识别问题，以及自然语言文生图"
+                "已连接！支持文字聊天、天气查询与预报、发送图片识别问题，以及自然语言文生图"
                         + " (按 Ctrl+C 停止)...\n");
 
         try {
@@ -253,6 +251,7 @@ public class ILinkServiceImpl implements ILinkService {
 
     private String userFacingError(CliException error) {
         return switch (error.getErrorCode()) {
+            case INVALID_INPUT -> error.getUserMessage();
             case CONFIG_ERROR -> "AI 服务尚未配置完成，请联系管理员。";
             case NETWORK_ERROR -> "AI 服务暂时不可用，请稍后重试。";
             default -> "消息处理失败，请稍后重试。";
@@ -315,52 +314,35 @@ public class ILinkServiceImpl implements ILinkService {
         return "image/jpeg";
     }
 
-    /** 智能消息处理: XX天气 → 查天气 | 管理命令/其他文本 → DeepSeek */
+    /** 智能消息处理: 天气意图 → 查实时天气或预报 | 管理命令/其他文本 → DeepSeek */
     private String processMessage(String userId, String text) {
         if (text.stripLeading().startsWith("/")) {
             return getChatService().chat(userId, text);
         }
 
-        String city = extractCity(text);
-        if (city != null) {
-            String weather = tryWeather(city);
+        WeatherIntent weatherIntent = weatherIntentParser.parse(text);
+        if (weatherIntent != null) {
+            String weather = tryWeather(weatherIntent);
             return weather != null ? weather : "天气服务暂时不可用，请稍后重试。";
         }
 
         return getChatService().chat(userId, text);
     }
 
-    private String tryWeather(String city) {
+    private String tryWeather(WeatherIntent intent) {
         try {
-            WeatherResult r = weatherService.query(city);
-            return formatWeather(r);
-        } catch (Exception e) {
+            LocalDate today = LocalDate.now(WeatherIntentParser.WEATHER_ZONE);
+            if (intent.targetDate().equals(today)) {
+                return formatWeather(weatherService.query(intent.city()));
+            }
+            return formatForecast(weatherService.forecast(intent.city(), intent.targetDate()));
+        } catch (CliException e) {
+            LOG.warn("天气查询失败 [{}]: {}", e.getErrorCode(), e.getUserMessage());
+            return e.getErrorCode() == ErrorCode.INVALID_INPUT ? e.getUserMessage() : null;
+        } catch (RuntimeException e) {
             LOG.warn("天气查询失败: {}", e.getMessage());
             return null;
         }
-    }
-
-    static String extractCity(String text) {
-        if (text == null || text.isBlank()) {
-            return null;
-        }
-
-        String normalized = text.trim();
-        Matcher weatherKeyword = WEATHER_KEYWORD_PATTERN.matcher(normalized);
-        if (!weatherKeyword.find()) {
-            return null;
-        }
-
-        String city = normalized.substring(0, weatherKeyword.start()).trim();
-        String previous;
-        do {
-            previous = city;
-            city = WEATHER_QUERY_PREFIX_PATTERN.matcher(city).replaceFirst("").trim();
-        } while (!city.isEmpty() && !city.equals(previous));
-
-        city = WEATHER_LEADING_TIME_PATTERN.matcher(city).replaceFirst("").trim();
-        city = WEATHER_TRAILING_MODIFIER_PATTERN.matcher(city).replaceFirst("").trim();
-        return city.isEmpty() ? null : city;
     }
 
     private String formatWeather(WeatherResult r) {
@@ -370,6 +352,23 @@ public class ILinkServiceImpl implements ILinkService {
             + " (体感 " + String.format("%.0f", r.feelsLike()) + "C)\n"
             + "今日 " + String.format("%.0f", r.lowTemp()) + "~" + String.format("%.0f", r.highTemp()) + "C\n" + "湿度 " + r.humidity() + "% | 风速 " + r.windSpeed() + " m/s\n"
             + "更新时间: " + sdf.format(new Date(r.updateTime()));
+    }
+
+    private String formatForecast(WeatherForecastResult forecast) {
+        DateTimeFormatter dateFormatter =
+                DateTimeFormatter.ofPattern("yyyy-MM-dd EEEE", Locale.SIMPLIFIED_CHINESE);
+        String description = forecast.dayDescription().equals(forecast.nightDescription())
+                ? forecast.dayDescription()
+                : forecast.dayDescription() + "转" + forecast.nightDescription();
+        SimpleDateFormat updateFormatter = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        return "【" + forecast.city() + "天气预报】\n"
+                + "日期: " + forecast.forecastDate().format(dateFormatter) + "\n"
+                + description + "，"
+                + String.format("%.0f", forecast.lowTemp()) + "~"
+                + String.format("%.0f", forecast.highTemp()) + "C\n"
+                + "湿度 " + forecast.humidity() + "% | 风速 "
+                + String.format("%.1f", forecast.windSpeed()) + " m/s\n"
+                + "更新时间: " + updateFormatter.format(new Date(forecast.updateTime()));
     }
 
     private ILinkClient createClient(ResumeContext resumeContext) {
