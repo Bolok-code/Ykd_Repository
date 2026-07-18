@@ -27,11 +27,22 @@ public final class WeatherIntentParser {
             Pattern.compile("(大后天|后天|明天|今天|今日|现在|当前)");
     private static final Pattern QUERY_PREFIX_PATTERN = Pattern.compile(
             "^(?:请问一下|请问|请|麻烦|劳驾|帮我|帮忙|给我|告诉我|"
-                    + "我想要?|想要?|查询一下|查一下|查询|查查|查|看看|看一下|了解一下)\\s*");
+                    + "我想知道|想知道|我想要?|想要?|查询一下|查一下|查询|查查|查|"
+                    + "看看|看一下|了解一下)\\s*");
+    private static final Pattern WEATHER_QUERY_PATTERN = Pattern.compile(
+            "^\\s*([\\p{IsHan}A-Za-z][\\p{IsHan}A-Za-z·'\\-\\s]{0,29}?)"
+                    + "(?:的)?\\s*(?:天气预报|天气|气温|多少度|温度)"
+                    + "\\s*(?:怎么样|如何|是什么情况|什么情况|会怎样|好吗|好不好|"
+                    + "冷不冷|热不热|多少|几度|情况|呢|吗)?\\s*[？?]?\\s*$");
+    private static final Pattern NON_QUERY_CONTEXT_PATTERN = Pattern.compile(
+            "(?:我|我们|你|你们|他|他们|她|她们|喜欢|觉得|感觉|听说|发现|"
+                    + "去|玩|旅游|出差|工作|生活|上学|散步|逛|真好|很好|不错|"
+                    + "糟糕|适合|舒服|热死|冷死|下雨了|放晴了)");
     private static final Pattern LEADING_PARTICLE_PATTERN =
             Pattern.compile("^(?:一下|的)\\s*");
     private static final Pattern TRAILING_PHRASE_PATTERN = Pattern.compile(
-            "\\s*(?:怎么样|如何|是什么情况|什么情况|会怎样|情况|一下|呢|吗|呀|啊|吧)\\s*$");
+            "\\s*(?:怎么样|如何|是什么情况|什么情况|会怎样|好吗|好不好|冷不冷|"
+                    + "热不热|多少|几度|情况|一下|呢|吗|呀|啊|吧)\\s*$");
     private static final Pattern TRAILING_PARTICLE_PATTERN =
             Pattern.compile("\\s*的\\s*$");
     private static final Pattern EDGE_PUNCTUATION_PATTERN =
@@ -62,10 +73,37 @@ public final class WeatherIntentParser {
 
         LocalDate today = LocalDate.now(clock);
         ParsedDate parsedDate = parseDate(normalized, today);
-        String city = removeRange(normalized, parsedDate.start(), parsedDate.end());
+        String queryText = removeRange(normalized, parsedDate.start(), parsedDate.end());
+        String city = queryText;
         city = WEATHER_KEYWORD_PATTERN.matcher(city).replaceAll(" ");
         city = cleanCity(city);
-        return city.isEmpty() ? null : new WeatherIntent(city, parsedDate.date());
+        if (city.isEmpty() || !isWeatherQuery(queryText, city)) {
+            return null;
+        }
+        return new WeatherIntent(city, parsedDate.date());
+    }
+
+    private boolean isWeatherQuery(String queryText, String city) {
+        String normalized = stripQueryPrefixes(queryText);
+        Matcher query = WEATHER_QUERY_PATTERN.matcher(normalized);
+        if (!query.matches()) {
+            return false;
+        }
+
+        String capturedCity = cleanCity(query.group(1));
+        return city.equals(capturedCity)
+                && !NON_QUERY_CONTEXT_PATTERN.matcher(capturedCity).find();
+    }
+
+    private String stripQueryPrefixes(String value) {
+        String result = EDGE_PUNCTUATION_PATTERN.matcher(value).replaceAll("").trim();
+        String previous;
+        do {
+            previous = result;
+            result = QUERY_PREFIX_PATTERN.matcher(result).replaceFirst("").trim();
+            result = LEADING_PARTICLE_PATTERN.matcher(result).replaceFirst("").trim();
+        } while (!result.isEmpty() && !result.equals(previous));
+        return result;
     }
 
     private ParsedDate parseDate(String text, LocalDate today) {

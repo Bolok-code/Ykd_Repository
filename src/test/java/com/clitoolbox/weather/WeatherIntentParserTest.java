@@ -23,6 +23,9 @@ class WeatherIntentParserTest {
         assertIntent("杭州", LocalDate.of(2026, 7, 18), "帮我查一下杭州天气");
         assertIntent("杭州", LocalDate.of(2026, 7, 18), "杭州的天气怎么样");
         assertIntent("杭州", LocalDate.of(2026, 7, 18), "帮我看看杭州现在的温度");
+        assertIntent("杭州", LocalDate.of(2026, 7, 18), "杭州天气好吗");
+        assertIntent("杭州", LocalDate.of(2026, 7, 18), "杭州天气冷不冷");
+        assertIntent("杭州", LocalDate.of(2026, 7, 18), "杭州气温多少");
     }
 
     @Test
@@ -55,6 +58,17 @@ class WeatherIntentParserTest {
         assertNull(parser.parse("天气怎么样"));
         assertNull(parser.parse("你好"));
         assertNull(parser.parse(null));
+    }
+
+    @Test
+    void ignoresDeclarativeSentencesThatOnlyMentionWeather() {
+        assertNull(parser.parse("今天去杭州玩了，天气真好"));
+        assertNull(parser.parse("今天去杭州玩了天气真好"));
+        assertNull(parser.parse("杭州天气真好"));
+        assertNull(parser.parse("杭州天气晴朗"));
+        assertNull(parser.parse("我很喜欢杭州的天气"));
+        assertNull(parser.parse("昨天杭州天气不错"));
+        assertNull(parser.parse("今天去杭州玩了，天气真好吗"));
     }
 
     private void assertIntent(String city, LocalDate date, String text) {
