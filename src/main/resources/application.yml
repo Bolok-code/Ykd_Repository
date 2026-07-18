@@ -35,3 +35,8 @@ app:
     image-model: ${BAILIAN_IMAGE_MODEL:qwen-image-2.0}
     image-size: ${BAILIAN_IMAGE_SIZE:1024*1024}
     timeout-seconds: ${BAILIAN_TIMEOUT_SECONDS:180}
+    tts:
+      model: ${BAILIAN_TTS_MODEL:qwen-audio-3.0-tts-flash}
+      voice: ${BAILIAN_TTS_VOICE:longanlingxi}
+      sample-rate: ${BAILIAN_TTS_SAMPLE_RATE:16000}
+      timeout-seconds: ${BAILIAN_TTS_TIMEOUT_SECONDS:180}

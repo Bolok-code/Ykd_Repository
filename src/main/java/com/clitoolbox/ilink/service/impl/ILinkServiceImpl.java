@@ -2,6 +2,8 @@ package com.clitoolbox.ilink.service.impl;
 
 import com.clitoolbox.ai.image.GeneratedImage;
 import com.clitoolbox.ai.image.ImageGenerationClient;
+import com.clitoolbox.ai.speech.GeneratedSpeech;
+import com.clitoolbox.ai.speech.SpeechSynthesisClient;
 import com.clitoolbox.ai.vision.ImageUnderstandingClient;
 import com.clitoolbox.conversation.ChatService;
 import com.clitoolbox.conversation.PerUserTaskDispatcher;
@@ -57,6 +59,7 @@ public class ILinkServiceImpl implements ILinkService {
     private final ObjectProvider<ChatService> chatServiceProvider;
     private final ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider;
     private final ObjectProvider<ImageGenerationClient> imageGenerationClientProvider;
+    private final ObjectProvider<SpeechSynthesisClient> speechSynthesisClientProvider;
     private final ILinkMessageRouter messageRouter;
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private volatile ILinkClient client;
@@ -69,6 +72,7 @@ public class ILinkServiceImpl implements ILinkService {
             ObjectProvider<ChatService> chatServiceProvider,
             ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider,
             ObjectProvider<ImageGenerationClient> imageGenerationClientProvider,
+            ObjectProvider<SpeechSynthesisClient> speechSynthesisClientProvider,
             ILinkMessageRouter messageRouter) {
         this.chatDispatcher = chatDispatcher;
         this.objectMapper = objectMapper;
@@ -77,6 +81,7 @@ public class ILinkServiceImpl implements ILinkService {
         this.chatServiceProvider = chatServiceProvider;
         this.imageUnderstandingClientProvider = imageUnderstandingClientProvider;
         this.imageGenerationClientProvider = imageGenerationClientProvider;
+        this.speechSynthesisClientProvider = speechSynthesisClientProvider;
         this.messageRouter = messageRouter;
     }
 
@@ -202,6 +207,11 @@ public class ILinkServiceImpl implements ILinkService {
                         replyWithImageUnderstanding(activeClient, userId, text, imageItem);
                 case IMAGE_GENERATION ->
                         replyWithGeneratedImage(activeClient, userId, text);
+                case VOICE_REPLY ->
+                        replyWithGeneratedVoice(
+                                activeClient,
+                                userId,
+                                messageRouter.extractVoiceQuestion(text));
                 case TEXT_CHAT -> {
                     String answer = processMessage(userId, text);
                     activeClient.sendText(userId, answer);
@@ -239,6 +249,30 @@ public class ILinkServiceImpl implements ILinkService {
         GeneratedImage generated = imageGenerationClientProvider.getObject().generate(prompt);
         // caption 传 null，保证一次文生图只发送一张图片，避免文字和图片形成两次回复。
         activeClient.sendImage(userId, generated.data(), generated.fileName(), null);
+    }
+
+    private void replyWithGeneratedVoice(
+            ILinkClient activeClient,
+            String userId,
+            String question) throws IOException {
+        String answer = processMessage(userId, question);
+        try {
+            GeneratedSpeech speech =
+                    speechSynthesisClientProvider.getObject().synthesize(answer);
+            activeClient.sendVoice(
+                    userId,
+                    speech.data(),
+                    speech.fileName(),
+                    speech.playTimeMs(),
+                    speech.sampleRate(),
+                    null,
+                    speech.encodeType(),
+                    speech.bitsPerSample(),
+                    null);
+        } catch (CliException | IOException e) {
+            LOG.warn("语音回复失败，将回退为文字消息: {}", e.getMessage());
+            activeClient.sendText(userId, answer);
+        }
     }
 
     private void sendSafely(ILinkClient activeClient, String userId, String text) {

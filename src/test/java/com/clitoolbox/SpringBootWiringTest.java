@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.clitoolbox.ai.AiChatClient;
 import com.clitoolbox.ai.SpringAiDeepSeekClient;
 import com.clitoolbox.ai.image.ImageGenerationClient;
+import com.clitoolbox.ai.speech.SpeechSynthesisClient;
 import com.clitoolbox.ai.vision.ImageUnderstandingClient;
 import com.clitoolbox.config.BailianConfig;
 import com.clitoolbox.config.DeepSeekConfig;
@@ -51,5 +52,6 @@ class SpringBootWiringTest {
         assertFalse(bailianConfig.toString().contains("test-bailian-key"));
         assertNotNull(applicationContext.getBean(ImageUnderstandingClient.class));
         assertNotNull(applicationContext.getBean(ImageGenerationClient.class));
+        assertNotNull(applicationContext.getBean(SpeechSynthesisClient.class));
     }
 }

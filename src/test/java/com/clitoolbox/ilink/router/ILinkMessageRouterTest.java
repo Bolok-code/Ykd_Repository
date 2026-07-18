@@ -34,4 +34,14 @@ class ILinkMessageRouterTest {
                 MessageRoute.TEXT_CHAT,
                 router.route("给我讲讲月球的形成过程", false));
     }
+
+    @Test
+    void recognizesVoiceReplyIntentAndExtractsQuestion() {
+        assertEquals(
+                MessageRoute.VOICE_REPLY,
+                router.route("请用语音回答：明天杭州天气", false));
+        assertEquals(
+                "明天杭州天气",
+                router.extractVoiceQuestion("请用语音回答：明天杭州天气"));
+    }
 }

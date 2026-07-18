@@ -32,6 +32,16 @@ public class ILinkMessageRouter {
             "文生图",
             "text to image",
             "text-to-image");
+    private static final List<String> VOICE_REPLY_PHRASES = List.of(
+            "用语音回复",
+            "请用语音回复",
+            "用语音回答",
+            "请用语音回答",
+            "语音回答",
+            "用语音告诉我",
+            "语音告诉我",
+            "发语音说",
+            "发一段语音");
 
     public MessageRoute route(String text, boolean containsImage) {
         if (containsImage) {
@@ -39,6 +49,9 @@ public class ILinkMessageRouter {
         }
         if (isImageGenerationIntent(text)) {
             return MessageRoute.IMAGE_GENERATION;
+        }
+        if (isVoiceReplyIntent(text)) {
+            return MessageRoute.VOICE_REPLY;
         }
         return MessageRoute.TEXT_CHAT;
     }
@@ -52,9 +65,38 @@ public class ILinkMessageRouter {
                 || IMAGE_GENERATION_PATTERN.matcher(normalized).find();
     }
 
+    boolean isVoiceReplyIntent(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String normalized = text.trim().toLowerCase(Locale.ROOT);
+        return VOICE_REPLY_PHRASES.stream().anyMatch(normalized::contains);
+    }
+
+    /**
+     * 删除常见的“用语音回复”前缀，让天气和普通聊天继续处理真正的问题。
+     */
+    public String extractVoiceQuestion(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String result = text.trim();
+        for (String phrase : VOICE_REPLY_PHRASES) {
+            int index = result.indexOf(phrase);
+            if (index >= 0) {
+                result = result.substring(index + phrase.length())
+                        .replaceFirst("^[：:，,。\\s]+", "")
+                        .trim();
+                break;
+            }
+        }
+        return result.isBlank() ? "请和我打个招呼" : result;
+    }
+
     public enum MessageRoute {
         TEXT_CHAT,
         IMAGE_UNDERSTANDING,
-        IMAGE_GENERATION
+        IMAGE_GENERATION,
+        VOICE_REPLY
     }
 }
