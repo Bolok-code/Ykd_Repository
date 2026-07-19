@@ -23,15 +23,12 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 /**
- * 调用百炼 Qwen-Audio-TTS 非实时接口，将文字合成为单声道 16 位 PCM。
+ * 调用百炼 Qwen-Audio-TTS 非实时接口，将文字合成为 MP3 或 WAV 文件。
  */
 public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient {
     private static final Logger LOG =
             LoggerFactory.getLogger(BailianSpeechSynthesisClient.class);
     private static final ObjectMapper ERROR_MAPPER = new ObjectMapper();
-    static final int PCM_ENCODE_TYPE = 1;
-    static final int AUDIO_BITS_PER_SAMPLE = 16;
-    private static final int PCM_CHANNELS = 1;
     private static final int MAX_TEXT_CHARS = 5_000;
     private static final int MAX_HTTP_ATTEMPTS = 3;
     private static final long RETRY_BASE_DELAY_MS = 800L;
@@ -100,7 +97,7 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
                 "input", Map.of(
                         "text", normalizedText,
                         "voice", config.voice(),
-                        "format", "pcm",
+                        "format", config.format(),
                         "sample_rate", config.sampleRate()));
 
         try {
@@ -152,18 +149,6 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
                         : "百炼语音合成失败：" + message);
     }
 
-    static int calculatePcmPlayTimeMs(int byteLength, int sampleRate) {
-        if (byteLength <= 0
-                || byteLength % (AUDIO_BITS_PER_SAMPLE / 8) != 0
-                || sampleRate <= 0) {
-            throw new CliException(ErrorCode.UNKNOWN, "百炼返回的 PCM 音频信息不完整。");
-        }
-        long bytesPerSecond =
-                (long) sampleRate * PCM_CHANNELS * AUDIO_BITS_PER_SAMPLE / 8;
-        long playTimeMs = Math.max(1L, byteLength * 1_000L / bytesPerSecond);
-        return Math.toIntExact(playTimeMs);
-    }
-
     private GeneratedSpeech downloadGeneratedSpeech(URI audioUri) {
         ResponseEntity<byte[]> entity = executeWithRetry(
                 "下载合成结果",
@@ -175,14 +160,9 @@ public final class BailianSpeechSynthesisClient implements SpeechSynthesisClient
         if (bytes == null || bytes.length == 0) {
             throw new CliException(ErrorCode.UNKNOWN, "百炼生成的语音下载失败。");
         }
-        int playTimeMs = calculatePcmPlayTimeMs(bytes.length, config.sampleRate());
         return new GeneratedSpeech(
                 bytes,
-                "bailian-reply.pcm",
-                playTimeMs,
-                config.sampleRate(),
-                PCM_ENCODE_TYPE,
-                AUDIO_BITS_PER_SAMPLE);
+                "bailian-reply." + config.format());
     }
 
     private <T> T executeWithRetry(String operation, Supplier<T> request) {

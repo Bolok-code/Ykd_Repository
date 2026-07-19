@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record BailianTtsProperties(
         String model,
         String voice,
+        String format,
         int sampleRate,
         int timeoutSeconds) {
 
@@ -17,6 +18,7 @@ public record BailianTtsProperties(
         return new BailianTtsConfig(
                 model,
                 voice,
+                format,
                 sampleRate,
                 Duration.ofSeconds(timeoutSeconds));
     }

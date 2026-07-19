@@ -10,11 +10,9 @@ import com.clitoolbox.ai.AiChatClient;
 import com.clitoolbox.ai.SpringAiDeepSeekClient;
 import com.clitoolbox.ai.image.ImageGenerationClient;
 import com.clitoolbox.ai.speech.SpeechSynthesisClient;
-import com.clitoolbox.ai.speech.SpeechEncoder;
 import com.clitoolbox.ai.vision.ImageUnderstandingClient;
 import com.clitoolbox.config.BailianConfig;
 import com.clitoolbox.config.DeepSeekConfig;
-import com.clitoolbox.config.VoiceReplyProperties;
 import com.clitoolbox.ilink.service.ILinkService;
 import com.clitoolbox.ilink.service.impl.ILinkServiceImpl;
 import org.junit.jupiter.api.Test;
@@ -55,9 +53,5 @@ class SpringBootWiringTest {
         assertNotNull(applicationContext.getBean(ImageUnderstandingClient.class));
         assertNotNull(applicationContext.getBean(ImageGenerationClient.class));
         assertNotNull(applicationContext.getBean(SpeechSynthesisClient.class));
-        assertNotNull(applicationContext.getBean(SpeechEncoder.class));
-        assertTrue(applicationContext
-                .getBean(VoiceReplyProperties.class)
-                .sendFileCopyAfterNative());
     }
 }

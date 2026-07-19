@@ -53,17 +53,6 @@ class BailianSpeechSynthesisClientTest {
     }
 
     @Test
-    void calculatesMonoSixteenBitPcmDuration() {
-        int oneSecondAt24Khz = 24_000 * 2;
-
-        assertEquals(
-                1_000,
-                BailianSpeechSynthesisClient.calculatePcmPlayTimeMs(
-                        oneSecondAt24Khz,
-                        24_000));
-    }
-
-    @Test
     void parsesDashScopeErrorDetails() {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-DashScope-Request-Id", "request-from-header");

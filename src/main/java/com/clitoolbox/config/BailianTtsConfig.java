@@ -3,6 +3,7 @@ package com.clitoolbox.config;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -11,8 +12,10 @@ import java.util.Set;
 public record BailianTtsConfig(
         String model,
         String voice,
+        String format,
         int sampleRate,
         Duration timeout) {
+    private static final Set<String> SUPPORTED_FORMATS = Set.of("mp3", "wav");
     private static final Set<Integer> SUPPORTED_SAMPLE_RATES =
             Set.of(8_000, 16_000, 22_050, 24_000, 44_100, 48_000);
 
@@ -22,6 +25,12 @@ public record BailianTtsConfig(
         }
         if (voice == null || voice.isBlank()) {
             throw new CliException(ErrorCode.CONFIG_ERROR, "百炼语音合成音色不能为空。");
+        }
+        if (format == null
+                || !SUPPORTED_FORMATS.contains(format.trim().toLowerCase(Locale.ROOT))) {
+            throw new CliException(
+                    ErrorCode.CONFIG_ERROR,
+                    "百炼语音文件格式只支持 mp3 或 wav。");
         }
         if (!SUPPORTED_SAMPLE_RATES.contains(sampleRate)) {
             throw new CliException(
@@ -34,5 +43,6 @@ public record BailianTtsConfig(
 
         model = model.trim();
         voice = voice.trim();
+        format = format.trim().toLowerCase(Locale.ROOT);
     }
 }
