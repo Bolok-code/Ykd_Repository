@@ -3,7 +3,10 @@ package com.clitoolbox.conversation;
 import com.clitoolbox.ai.ChatMessage;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 public class JdbcConversationRepository implements ConversationRepository {
     private final JdbcTemplate jdbcTemplate;
@@ -65,6 +68,31 @@ public class JdbcConversationRepository implements ConversationRepository {
                 """;
         jdbcTemplate.update(sql, userId);
     }
+
+    @Override
+    public Optional<ConversationContext> findLatestContext(String userId, String intent) {
+        String sql = """
+            SELECT intent, city, target_date
+            FROM conversation_message
+            WHERE user_id = ? AND intent = ?
+            AND city IS NOT NULL
+            AND city <> ''
+            ORDER BY id DESC
+            LIMIT 1
+            """;
+        List<ConversationContext> contexts = jdbcTemplate.query(
+                sql,
+                (resultSet,rowNum)->new ConversationContext(
+                        resultSet.getString("intent"),
+                        resultSet.getString("city"),
+                        resultSet.getObject("target_date", LocalDate.class)
+                ),
+                userId,
+                intent
+        );
+        return contexts.stream().findFirst();
+    }
+
     private void insertMessage(String userId, ChatMessage message, ConversationTurn turn) {
         String sql = """
             INSERT INTO conversation_message

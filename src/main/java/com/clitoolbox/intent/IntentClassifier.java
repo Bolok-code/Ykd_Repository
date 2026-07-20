@@ -9,5 +9,9 @@ public interface IntentClassifier {
 
     IntentDecision classify(String text);
 
+    default IntentDecision classify(String text, IntentContext context) {
+        return classify(text);
+    }
+
     String modelName();
 }

@@ -4,6 +4,7 @@ import com.clitoolbox.config.IntentAiConfig;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
 import com.clitoolbox.intent.IntentClassifier;
+import com.clitoolbox.intent.IntentContext;
 import com.clitoolbox.intent.IntentDecision;
 import com.clitoolbox.intent.IntentType;
 import com.clitoolbox.intent.ReplyMode;
@@ -15,6 +16,7 @@ import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -78,6 +80,16 @@ public final class SpringAiDoubaoIntentClassifier implements IntentClassifier {
               "requestText": ""
             }
             """;
+    private static final String CONTEXT_RULES = """
+
+            上一轮业务上下文由应用程序提供，只能用于判断当前消息是否是自然追问：
+            - previousContext.previousIntent 为 WEATHER_QUERY，且当前消息是“后天呢”
+              “那明天呢”等日期追问时，应判断为 WEATHER_QUERY。
+            - 确认是天气追问时，复用 previousContext.city，并根据当前消息重新计算 targetDate。
+            - 当前消息是新的陈述、闲聊或其他独立问题时，不得因为存在天气上下文而判为天气查询。
+            - “今天天气真好”等陈述仍然属于 TEXT_CHAT。
+            - 上下文足以消除歧义时，应给出正常的高置信度，不要仅因当前消息较短而降低置信度。
+            """;
 
     private final IntentAiConfig config;
     private final ChatModel chatModel;
@@ -97,6 +109,11 @@ public final class SpringAiDoubaoIntentClassifier implements IntentClassifier {
 
     @Override
     public IntentDecision classify(String text) {
+        return classify(text, null);
+    }
+
+    @Override
+    public IntentDecision classify(String text, IntentContext context) {
         if (text == null || text.isBlank()) {
             throw new CliException(ErrorCode.INVALID_INPUT, "待识别的消息不能为空。");
         }
@@ -109,12 +126,27 @@ public final class SpringAiDoubaoIntentClassifier implements IntentClassifier {
 
         try {
             LocalDate today = LocalDate.now(clock);
-            String inputJson = objectMapper.writeValueAsString(normalized);
+            Map<String, Object> input = new LinkedHashMap<>();
+            input.put("currentMessage", normalized);
+            if (context == null) {
+                input.put("previousContext", null);
+            } else {
+                Map<String, Object> previousContext = new LinkedHashMap<>();
+                previousContext.put("previousIntent", context.previousIntent());
+                previousContext.put("city", context.city());
+                previousContext.put(
+                        "targetDate",
+                        context.targetDate() == null
+                                ? null
+                                : context.targetDate().toString());
+                input.put("previousContext", previousContext);
+            }
+            String inputJson = objectMapper.writeValueAsString(input);
             List<Message> messages = List.of(
-                    new SystemMessage(SYSTEM_PROMPT),
+                    new SystemMessage(SYSTEM_PROMPT + CONTEXT_RULES),
                     new UserMessage(
                             "当前日期（Asia/Shanghai）：" + today
-                                    + "\n用户消息（JSON 字符串）：" + inputJson));
+                                    + "\n输入数据（JSON）：" + inputJson));
             ChatResponse response = chatModel.call(new Prompt(messages));
             return parseAndValidate(extractContent(response), normalized, today);
         } catch (CliException e) {

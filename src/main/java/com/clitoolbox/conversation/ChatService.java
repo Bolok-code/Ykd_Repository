@@ -7,9 +7,11 @@ import com.clitoolbox.exception.ErrorCode;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 /**
  * 多轮聊天业务服务。
@@ -70,7 +72,25 @@ public class ChatService {
         repository.appendTurn(userId, turn);
         return answer;
     }
-
+    public void recordTurn(
+            String userId,
+            String userText,
+            String assistantText,
+            String intent,
+            String city,
+            LocalDate targetDate
+    ){
+            ChatMessage userMessage = ChatMessage.user(userText);
+            ChatMessage assistantMessage = ChatMessage.assistant(assistantText);
+            ConversationTurn turn = new ConversationTurn(userMessage,assistantMessage,intent,city,targetDate);
+            repository.appendTurn(userId, turn);
+    }
+    public Optional<ConversationContext> findLatestContext(
+            String userId,
+            String intent
+    ){
+        return repository.findLatestContext(userId,intent);
+    }
     private List<ChatMessage> historyWithinCharacterBudget(List<ChatMessage> history) {
         if (history.isEmpty()) {
             return history;

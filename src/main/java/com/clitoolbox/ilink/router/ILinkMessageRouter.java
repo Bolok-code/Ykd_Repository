@@ -2,6 +2,7 @@ package com.clitoolbox.ilink.router;
 
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.intent.IntentClassifier;
+import com.clitoolbox.intent.IntentContext;
 import com.clitoolbox.intent.IntentDecision;
 import com.clitoolbox.intent.IntentType;
 import com.clitoolbox.intent.ReplyMode;
@@ -29,6 +30,13 @@ public class ILinkMessageRouter {
     }
 
     public RoutingDecision route(String text, boolean containsImage) {
+        return route(text, containsImage, null);
+    }
+
+    public RoutingDecision route(
+            String text,
+            boolean containsImage,
+            IntentContext context) {
         if (containsImage) {
             return new RoutingDecision(
                     MessageRoute.IMAGE_UNDERSTANDING,
@@ -49,7 +57,7 @@ public class ILinkMessageRouter {
         }
 
         try {
-            IntentDecision intent = intentClassifier.classify(normalized);
+            IntentDecision intent = intentClassifier.classify(normalized, context);
             LOG.info(
                     "意图识别完成 - model={}, intent={}, replyMode={}, confidence={}",
                     intentClassifier.modelName(),

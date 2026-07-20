@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.clitoolbox.config.IntentAiConfig;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
+import com.clitoolbox.intent.IntentContext;
 import com.clitoolbox.intent.IntentDecision;
 import com.clitoolbox.intent.IntentType;
 import com.clitoolbox.intent.ReplyMode;
@@ -107,6 +108,23 @@ class SpringAiDoubaoIntentClassifierTest {
         assertTrue(
                 request.path("messages").path(1).path("content").asText()
                         .contains("2026-07-20"));
+    }
+
+    @Test
+    void sendsPreviousWeatherContextWithAmbiguousFollowUp() throws Exception {
+        IntentContext context = new IntentContext(
+                "WEATHER_QUERY",
+                "Xuzhou",
+                LocalDate.of(2026, 7, 21));
+
+        classifier.classify("the day after tomorrow?", context);
+
+        JsonNode request = objectMapper.readTree(requestBody.get());
+        String userMessage = request.path("messages").path(1).path("content").asText();
+        assertTrue(userMessage.contains("\"currentMessage\":\"the day after tomorrow?\""));
+        assertTrue(userMessage.contains("\"previousIntent\":\"WEATHER_QUERY\""));
+        assertTrue(userMessage.contains("\"city\":\"Xuzhou\""));
+        assertTrue(userMessage.contains("\"targetDate\":\"2026-07-21\""));
     }
 
     @Test

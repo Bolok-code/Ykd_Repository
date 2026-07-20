@@ -7,6 +7,7 @@ import com.clitoolbox.exception.ErrorCode;
 import com.clitoolbox.ilink.router.ILinkMessageRouter.MessageRoute;
 import com.clitoolbox.ilink.router.ILinkMessageRouter.RoutingDecision;
 import com.clitoolbox.intent.IntentClassifier;
+import com.clitoolbox.intent.IntentContext;
 import com.clitoolbox.intent.IntentDecision;
 import com.clitoolbox.intent.IntentType;
 import com.clitoolbox.intent.ReplyMode;
@@ -90,11 +91,24 @@ class ILinkMessageRouterTest {
         assertEquals(0, classifier.calls);
     }
 
+    @Test
+    void passesPreviousBusinessContextToIntentModel() {
+        IntentContext context = new IntentContext(
+                "WEATHER_QUERY",
+                "Xuzhou",
+                LocalDate.of(2026, 7, 21));
+
+        router.route("the day after tomorrow?", false, context);
+
+        assertEquals(context, classifier.receivedContext);
+    }
+
     private static final class StubIntentClassifier implements IntentClassifier {
         private IntentDecision decision =
                 IntentDecision.textChat("默认聊天");
         private Throwable failure;
         private int calls;
+        private IntentContext receivedContext;
 
         @Override
         public IntentDecision classify(String text) {
@@ -106,6 +120,12 @@ class ILinkMessageRouterTest {
                 throw error;
             }
             return decision;
+        }
+
+        @Override
+        public IntentDecision classify(String text, IntentContext context) {
+            receivedContext = context;
+            return classify(text);
         }
 
         @Override

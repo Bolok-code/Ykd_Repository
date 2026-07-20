@@ -12,6 +12,7 @@ import com.clitoolbox.exception.ErrorCode;
 import com.clitoolbox.ilink.router.ILinkMessageRouter;
 import com.clitoolbox.ilink.router.ILinkMessageRouter.RoutingDecision;
 import com.clitoolbox.ilink.service.ILinkService;
+import com.clitoolbox.intent.IntentContext;
 import com.clitoolbox.intent.ReplyMode;
 import com.clitoolbox.weather.WeatherForecastResult;
 import com.clitoolbox.weather.WeatherIntent;
@@ -213,7 +214,11 @@ public class ILinkServiceImpl implements ILinkService {
                 System.out.println("  -> 消息处理完成");
                 return;
             }
-            RoutingDecision decision = messageRouter.route(text, imageItem != null);
+            IntentContext context = imageItem == null
+                    ? latestIntentContext(userId)
+                    : null;
+            RoutingDecision decision =
+                    messageRouter.route(text, imageItem != null, context);
             replyUsingDecision(activeClient, userId, decision, imageItem);
             System.out.println("  -> 消息处理完成");
         } catch (CliException e) {
@@ -273,7 +278,10 @@ public class ILinkServiceImpl implements ILinkService {
             return;
         }
 
-        RoutingDecision decision = messageRouter.route(transcript.trim(), false);
+        RoutingDecision decision = messageRouter.route(
+                transcript.trim(),
+                false,
+                latestIntentContext(userId));
         replyUsingDecision(activeClient, userId, decision, null);
     }
 
@@ -294,12 +302,33 @@ public class ILinkServiceImpl implements ILinkService {
                             activeClient,
                             userId,
                             decision.requestText());
-            case WEATHER_QUERY ->
-                    replyWithAnswer(
-                            activeClient,
-                            userId,
-                            weatherAnswer(decision),
-                            decision.replyMode());
+            case WEATHER_QUERY ->{
+                RoutingDecision weatherDecision =
+                        fillWeatherContext(userId, decision);
+
+                String answer = weatherAnswer(weatherDecision);
+
+                LocalDate targetDate =
+                        weatherDecision.targetDate() == null
+                                ? LocalDate.now(WeatherService.WEATHER_ZONE)
+                                : weatherDecision.targetDate();
+
+                getChatService().recordTurn(
+                        userId,
+                        weatherDecision.requestText(),
+                        answer,
+                        "WEATHER_QUERY",
+                        weatherDecision.city(),
+                        targetDate
+                );
+
+                replyWithAnswer(
+                        activeClient,
+                        userId,
+                        answer,
+                        weatherDecision.replyMode()
+                );
+            }
             case TEXT_CHAT ->
                     replyWithAnswer(
                             activeClient,
@@ -307,6 +336,34 @@ public class ILinkServiceImpl implements ILinkService {
                             getChatService().chat(userId, decision.requestText()),
                             decision.replyMode());
         }
+    }
+    private IntentContext latestIntentContext(String userId) {
+        return getChatService()
+                .findLatestContext(userId, "WEATHER_QUERY")
+                .map(context -> new IntentContext(
+                        context.intent(),
+                        context.city(),
+                        context.targetDate()))
+                .orElse(null);
+    }
+
+    private RoutingDecision fillWeatherContext(
+            String userId,
+            RoutingDecision decision) {
+        if (decision.city() != null && !decision.city().isBlank()) {
+            return decision;
+        }
+        return getChatService()
+                .findLatestContext(userId, "WEATHER_QUERY")
+                .map(context -> new RoutingDecision(
+                        decision.route(),
+                        decision.replyMode(),
+                        decision.requestText(),
+                        context.city(),
+                        decision.targetDate(),
+                        decision.confidence()
+                ))
+                .orElse(decision);
     }
 
     private void replyWithAnswer(
