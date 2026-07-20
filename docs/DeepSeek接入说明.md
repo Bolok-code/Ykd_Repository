@@ -112,6 +112,9 @@ $env:DEEPSEEK_API_KEY="你的API Key"
 mvn clean package
 ```
 
+可执行产物位于 `target/cli-toolbox-0.1.0-exec.jar`；不带 `-exec`
+的 Jar 是保留给 Maven 使用的普通产物。`run.bat` 会自动选择可执行产物。
+
 首次登录：
 
 ```powershell

@@ -10,7 +10,7 @@ public final class AppConfig {
     public static final String APP_NAME = "CLI-Toolbox";
     public static final String APP_VERSION = "0.1.0";
     public static final String APP_DESCRIPTION =
-            "多模块命令行工具箱 —— 集成天气查询与预报、微信 iLink Bot 与 DeepSeek 智能聊天";
+            "多模块命令行工具箱 —— 集成天气、微信 iLink Bot、豆包意图识别与 DeepSeek 聊天";
 
     public static final String[] COMMANDS = {
         "help    — 显示此帮助信息",

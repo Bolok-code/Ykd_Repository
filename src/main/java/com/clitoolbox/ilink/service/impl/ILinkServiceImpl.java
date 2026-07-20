@@ -10,11 +10,11 @@ import com.clitoolbox.conversation.PerUserTaskDispatcher;
 import com.clitoolbox.exception.CliException;
 import com.clitoolbox.exception.ErrorCode;
 import com.clitoolbox.ilink.router.ILinkMessageRouter;
-import com.clitoolbox.ilink.router.ILinkMessageRouter.MessageRoute;
+import com.clitoolbox.ilink.router.ILinkMessageRouter.RoutingDecision;
 import com.clitoolbox.ilink.service.ILinkService;
+import com.clitoolbox.intent.ReplyMode;
 import com.clitoolbox.weather.WeatherForecastResult;
 import com.clitoolbox.weather.WeatherIntent;
-import com.clitoolbox.weather.WeatherIntentParser;
 import com.clitoolbox.weather.WeatherResult;
 import com.clitoolbox.weather.WeatherService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,6 +24,7 @@ import com.github.wechat.ilink.sdk.core.context.ResumeContext;
 import com.github.wechat.ilink.sdk.core.exception.SessionExpiredException;
 import com.github.wechat.ilink.sdk.core.login.LoginContext;
 import com.github.wechat.ilink.sdk.core.model.MessageItem;
+import com.github.wechat.ilink.sdk.core.model.VoiceItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -55,7 +56,6 @@ public class ILinkServiceImpl implements ILinkService {
     private final PerUserTaskDispatcher chatDispatcher;
     private final ObjectMapper objectMapper;
     private final WeatherService weatherService;
-    private final WeatherIntentParser weatherIntentParser;
     private final ObjectProvider<ChatService> chatServiceProvider;
     private final ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider;
     private final ObjectProvider<ImageGenerationClient> imageGenerationClientProvider;
@@ -68,7 +68,6 @@ public class ILinkServiceImpl implements ILinkService {
             PerUserTaskDispatcher chatDispatcher,
             ObjectMapper objectMapper,
             WeatherService weatherService,
-            WeatherIntentParser weatherIntentParser,
             ObjectProvider<ChatService> chatServiceProvider,
             ObjectProvider<ImageUnderstandingClient> imageUnderstandingClientProvider,
             ObjectProvider<ImageGenerationClient> imageGenerationClientProvider,
@@ -77,7 +76,6 @@ public class ILinkServiceImpl implements ILinkService {
         this.chatDispatcher = chatDispatcher;
         this.objectMapper = objectMapper;
         this.weatherService = weatherService;
-        this.weatherIntentParser = weatherIntentParser;
         this.chatServiceProvider = chatServiceProvider;
         this.imageUnderstandingClientProvider = imageUnderstandingClientProvider;
         this.imageGenerationClientProvider = imageGenerationClientProvider;
@@ -138,8 +136,8 @@ public class ILinkServiceImpl implements ILinkService {
         ILinkClient activeClient = client;
 
         System.out.println(
-                "已连接！支持文字聊天、天气查询与预报、发送图片识别问题，以及自然语言文生图"
-                        + " (按 Ctrl+C 停止)...\n");
+                "已连接！支持文字/语音聊天、天气查询与预报、图片识别、自然语言文生图"
+                        + "和语音文件回复 (按 Ctrl+C 停止)...\n");
 
         try {
             while (!stopping.get()) {
@@ -175,18 +173,26 @@ public class ILinkServiceImpl implements ILinkService {
         String userId = message.getFrom_user_id();
         String text = extractText(message);
         MessageItem imageItem = firstImageItem(message);
+        MessageItem voiceItem = firstVoiceItem(message);
         if (userId == null || userId.isBlank()
-                || ((text == null || text.isBlank()) && imageItem == null)) {
+                || ((text == null || text.isBlank())
+                        && imageItem == null
+                        && voiceItem == null)) {
             return;
         }
 
-        String messageSummary = imageItem == null
-                ? text
-                : (text == null || text.isBlank() ? "[图片]" : "[图片] " + text);
+        String messageSummary;
+        if (imageItem != null) {
+            messageSummary = text == null || text.isBlank() ? "[图片]" : "[图片] " + text;
+        } else if (voiceItem != null) {
+            messageSummary = "[语音气泡]";
+        } else {
+            messageSummary = text;
+        }
         System.out.println("[" + userId + "] " + messageSummary);
         boolean accepted = chatDispatcher.submit(
                 userId,
-                () -> replyToMessage(activeClient, userId, text, imageItem));
+                () -> replyToMessage(activeClient, userId, text, imageItem, voiceItem));
         if (!accepted) {
             LOG.warn("聊天任务队列已满，拒绝用户消息: {}", userId);
         }
@@ -196,27 +202,19 @@ public class ILinkServiceImpl implements ILinkService {
             ILinkClient activeClient,
             String userId,
             String text,
-            MessageItem imageItem) {
+            MessageItem imageItem,
+            MessageItem voiceItem) {
         try {
             if (stopping.get()) {
                 return;
             }
-            MessageRoute route = messageRouter.route(text, imageItem != null);
-            switch (route) {
-                case IMAGE_UNDERSTANDING ->
-                        replyWithImageUnderstanding(activeClient, userId, text, imageItem);
-                case IMAGE_GENERATION ->
-                        replyWithGeneratedImage(activeClient, userId, text);
-                case VOICE_REPLY ->
-                        replyWithGeneratedVoice(
-                                activeClient,
-                                userId,
-                                messageRouter.extractVoiceQuestion(text));
-                case TEXT_CHAT -> {
-                    String answer = processMessage(userId, text);
-                    activeClient.sendText(userId, answer);
-                }
+            if (imageItem == null && voiceItem != null) {
+                replyWithWechatVoiceTranscript(activeClient, userId, voiceItem);
+                System.out.println("  -> 消息处理完成");
+                return;
             }
+            RoutingDecision decision = messageRouter.route(text, imageItem != null);
+            replyUsingDecision(activeClient, userId, decision, imageItem);
             System.out.println("  -> 消息处理完成");
         } catch (CliException e) {
             LOG.warn("消息处理失败 [{}]: {}", e.getErrorCode(), e.getUserMessage());
@@ -228,6 +226,98 @@ public class ILinkServiceImpl implements ILinkService {
             if (!stopping.get()) {
                 sendSafely(activeClient, userId, "服务暂时不可用，请稍后重试。");
             }
+        }
+    }
+
+    /**
+     * 验证 iLink 入站语音是否携带微信侧转写文字。
+     *
+     * <p>当前阶段只使用 {@link VoiceItem#getText()}，不下载或解码 SILK。若微信没有提供
+     * 转写，先给用户明确提示；后续再接入“下载语音 → SILK 转 WAV → 百炼 ASR”的兜底链路。
+     */
+    private void replyWithWechatVoiceTranscript(
+            ILinkClient activeClient,
+            String userId,
+            MessageItem voiceMessageItem) throws IOException {
+        VoiceItem voiceItem = voiceMessageItem.getVoice_item();
+        if (voiceItem == null) {
+            activeClient.sendText(userId, "没有读取到有效的微信语音消息，请重新发送。");
+            return;
+        }
+
+        String transcript = voiceItem.getText();
+        boolean hasTranscript = transcript != null && !transcript.isBlank();
+        String displayedText = hasTranscript
+                ? transcript.replace('\r', ' ').replace('\n', ' ').trim()
+                : "<empty>";
+
+        System.out.println(
+                "  -> VoiceItem: text=\"" + displayedText
+                        + "\", encodeType=" + voiceItem.getEncode_type()
+                        + ", sampleRate=" + voiceItem.getSample_rate()
+                        + ", playtime=" + voiceItem.getPlaytime());
+        LOG.info(
+                "收到微信语音气泡 - userId={}, hasTranscript={}, encodeType={}, "
+                        + "sampleRate={}, playtime={}",
+                userId,
+                hasTranscript,
+                voiceItem.getEncode_type(),
+                voiceItem.getSample_rate(),
+                voiceItem.getPlaytime());
+
+        if (!hasTranscript) {
+            activeClient.sendText(
+                    userId,
+                    "已收到语音气泡，但微信没有提供转写文字。"
+                            + "下一步需要下载语音并接入百炼语音识别。");
+            return;
+        }
+
+        RoutingDecision decision = messageRouter.route(transcript.trim(), false);
+        replyUsingDecision(activeClient, userId, decision, null);
+    }
+
+    private void replyUsingDecision(
+            ILinkClient activeClient,
+            String userId,
+            RoutingDecision decision,
+            MessageItem imageItem) throws IOException {
+        switch (decision.route()) {
+            case IMAGE_UNDERSTANDING ->
+                    replyWithImageUnderstanding(
+                            activeClient,
+                            userId,
+                            decision.requestText(),
+                            imageItem);
+            case IMAGE_GENERATION ->
+                    replyWithGeneratedImage(
+                            activeClient,
+                            userId,
+                            decision.requestText());
+            case WEATHER_QUERY ->
+                    replyWithAnswer(
+                            activeClient,
+                            userId,
+                            weatherAnswer(decision),
+                            decision.replyMode());
+            case TEXT_CHAT ->
+                    replyWithAnswer(
+                            activeClient,
+                            userId,
+                            getChatService().chat(userId, decision.requestText()),
+                            decision.replyMode());
+        }
+    }
+
+    private void replyWithAnswer(
+            ILinkClient activeClient,
+            String userId,
+            String answer,
+            ReplyMode replyMode) throws IOException {
+        if (replyMode == ReplyMode.VOICE) {
+            replyWithGeneratedVoice(activeClient, userId, answer);
+        } else {
+            activeClient.sendText(userId, answer);
         }
     }
 
@@ -254,8 +344,7 @@ public class ILinkServiceImpl implements ILinkService {
     private void replyWithGeneratedVoice(
             ILinkClient activeClient,
             String userId,
-            String question) throws IOException {
-        String answer = processMessage(userId, question);
+            String answer) throws IOException {
         try {
             GeneratedSpeech audio =
                     speechSynthesisClientProvider.getObject().synthesize(answer);
@@ -324,6 +413,18 @@ public class ILinkServiceImpl implements ILinkService {
         return null;
     }
 
+    private MessageItem firstVoiceItem(WeixinMessage message) {
+        if (message.getItem_list() == null) {
+            return null;
+        }
+        for (MessageItem item : message.getItem_list()) {
+            if (item != null && item.getVoice_item() != null) {
+                return item;
+            }
+        }
+        return null;
+    }
+
     private String detectImageMimeType(byte[] image) {
         if (image.length >= 8
                 && image[0] == (byte) 0x89
@@ -349,24 +450,20 @@ public class ILinkServiceImpl implements ILinkService {
         return "image/jpeg";
     }
 
-    /** 智能消息处理: 天气意图 → 查实时天气或预报 | 管理命令/其他文本 → DeepSeek */
-    private String processMessage(String userId, String text) {
-        if (text.stripLeading().startsWith("/")) {
-            return getChatService().chat(userId, text);
+    private String weatherAnswer(RoutingDecision decision) {
+        if (decision.city() == null || decision.city().isBlank()) {
+            return "请告诉我想查询哪个城市，例如“明天杭州天气”。";
         }
-
-        WeatherIntent weatherIntent = weatherIntentParser.parse(text);
-        if (weatherIntent != null) {
-            String weather = tryWeather(weatherIntent);
-            return weather != null ? weather : "天气服务暂时不可用，请稍后重试。";
-        }
-
-        return getChatService().chat(userId, text);
+        LocalDate targetDate = decision.targetDate() == null
+                ? LocalDate.now(WeatherService.WEATHER_ZONE)
+                : decision.targetDate();
+        String weather = tryWeather(new WeatherIntent(decision.city(), targetDate));
+        return weather != null ? weather : "天气服务暂时不可用，请稍后重试。";
     }
 
     private String tryWeather(WeatherIntent intent) {
         try {
-            LocalDate today = LocalDate.now(WeatherIntentParser.WEATHER_ZONE);
+            LocalDate today = LocalDate.now(WeatherService.WEATHER_ZONE);
             if (intent.targetDate().equals(today)) {
                 return formatWeather(weatherService.query(intent.city()));
             }

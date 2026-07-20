@@ -13,8 +13,10 @@ import com.clitoolbox.ai.speech.SpeechSynthesisClient;
 import com.clitoolbox.ai.vision.ImageUnderstandingClient;
 import com.clitoolbox.config.BailianConfig;
 import com.clitoolbox.config.DeepSeekConfig;
+import com.clitoolbox.config.IntentAiConfig;
 import com.clitoolbox.ilink.service.ILinkService;
 import com.clitoolbox.ilink.service.impl.ILinkServiceImpl;
+import com.clitoolbox.intent.IntentClassifier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,6 +26,7 @@ import org.springframework.context.ApplicationContext;
         args = "help",
         properties = {
             "app.deepseek.api-key=test-api-key",
+            "app.intent-ai.api-key=test-ark-key",
             "app.bailian.api-key=test-bailian-key",
             "app.bailian.workspace-id=test-workspace",
             "app.weather.api-key=test-weather-key",
@@ -42,6 +45,10 @@ class SpringBootWiringTest {
         assertTrue(aiChatClient instanceof SpringAiDeepSeekClient);
         assertEquals("deepseek-v4-flash", config.model());
         assertFalse(config.toString().contains("test-api-key"));
+        IntentAiConfig intentConfig = applicationContext.getBean(IntentAiConfig.class);
+        assertEquals("doubao-seed-2-0-mini-260428", intentConfig.model());
+        assertFalse(intentConfig.toString().contains("test-ark-key"));
+        assertNotNull(applicationContext.getBean(IntentClassifier.class));
         ILinkService iLinkService = applicationContext.getBean(ILinkService.class);
         assertNotNull(iLinkService);
         assertInstanceOf(ILinkServiceImpl.class, iLinkService);

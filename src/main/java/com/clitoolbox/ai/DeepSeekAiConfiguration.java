@@ -2,15 +2,14 @@ package com.clitoolbox.ai;
 
 import com.clitoolbox.config.DeepSeekConfig;
 import com.clitoolbox.config.DeepSeekProperties;
-import com.clitoolbox.conversation.ChatService;
-import com.clitoolbox.conversation.ConversationRepository;
-import com.clitoolbox.conversation.MemoryConversationRepository;
-import com.clitoolbox.conversation.PerUserTaskDispatcher;
+import com.clitoolbox.conversation.*;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -36,14 +35,22 @@ public class DeepSeekAiConfiguration {
 
     @Bean
     @Lazy
-    AiChatClient aiChatClient(DeepSeekConfig config, ChatModel deepSeekChatModel) {
+    AiChatClient aiChatClient(
+            DeepSeekConfig config,
+            @Qualifier("deepSeekChatModel") ChatModel deepSeekChatModel) {
         return new SpringAiDeepSeekClient(config, deepSeekChatModel);
     }
 
     @Bean
     @Lazy
-    ConversationRepository conversationRepository(DeepSeekConfig config) {
-        return new MemoryConversationRepository(config.historyRounds());
+    ConversationRepository conversationRepository(
+            DeepSeekConfig config,
+            JdbcTemplate jdbcTemplate
+
+    ) {
+        return new JdbcConversationRepository(
+                jdbcTemplate,
+                config.historyRounds());
     }
 
     @Bean

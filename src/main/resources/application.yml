@@ -9,6 +9,10 @@ spring:
     web-application-type: none
   lifecycle:
     timeout-per-shutdown-phase: 15s
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/ykd_bot?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USERNAME:ykd_app}
+    password: ${MYSQL_PASSWORD:}
 
 logging:
   file:
@@ -19,6 +23,13 @@ logging:
 app:
   weather:
     api-key: ${WEATHER_API_KEY:}
+  intent-ai:
+    api-key: ${ARK_API_KEY:}
+    base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+    model: ${ARK_INTENT_MODEL:doubao-seed-2-0-mini-260428}
+    max-tokens: ${ARK_INTENT_MAX_TOKENS:350}
+    timeout-seconds: ${ARK_INTENT_TIMEOUT_SECONDS:10}
+    confidence-threshold: ${INTENT_CONFIDENCE_THRESHOLD:0.70}
   deepseek:
     api-key: ${DEEPSEEK_API_KEY:}
     base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}

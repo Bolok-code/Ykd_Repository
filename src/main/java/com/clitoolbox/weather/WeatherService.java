@@ -15,6 +15,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import org.slf4j.Logger;
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Service;
 @Lazy
 public class WeatherService {
     private static final Logger LOG = LoggerFactory.getLogger(WeatherService.class);
+    public static final ZoneId WEATHER_ZONE = ZoneId.of("Asia/Shanghai");
     private static final String API_KEY_ENV = "WEATHER_API_KEY";
     private static final String NOW_URL = "https://api.seniverse.com/v3/weather/now.json";
     private static final String DAILY_URL = "https://api.seniverse.com/v3/weather/daily.json";
@@ -46,7 +48,7 @@ public class WeatherService {
                 objectMapper,
                 apiKey,
                 HttpClient.newBuilder().connectTimeout(TIMEOUT).build(),
-                Clock.system(WeatherIntentParser.WEATHER_ZONE));
+                Clock.system(WEATHER_ZONE));
     }
 
     WeatherService(

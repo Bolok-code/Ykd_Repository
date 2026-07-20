@@ -20,7 +20,7 @@ if not defined JAVA_MAJOR goto java_error
 if %JAVA_MAJOR% LSS 21 goto java_error
 
 pushd "%~dp0"
-set "TARGET=%CD%\target\cli-toolbox-0.1.0.jar"
+set "TARGET=%CD%\target\cli-toolbox-0.1.0-exec.jar"
 if not exist "%TARGET%" (
     echo [错误] 尚未找到可执行 Jar，请先运行 mvn clean package。
     popd

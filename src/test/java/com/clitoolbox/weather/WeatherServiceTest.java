@@ -36,7 +36,7 @@ class WeatherServiceTest {
     void setUp() {
         Clock clock = Clock.fixed(
                 Instant.parse("2026-07-18T04:00:00Z"),
-                WeatherIntentParser.WEATHER_ZONE);
+                WeatherService.WEATHER_ZONE);
         service = new WeatherService(
                 new ObjectMapper(),
                 "weather-test-key",
