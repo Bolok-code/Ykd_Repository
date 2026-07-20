@@ -10,7 +10,10 @@ public interface ConversationRepository {
 
     List<ChatMessage> findByUserId(String userId);
 
-    void append(String userId, ChatMessage message);
+    void appendTurn(String userId,
+                ChatMessage userMessage,
+                ChatMessage assistantMessage
+                );
 
     void clear(String userId);
 }

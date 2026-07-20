@@ -34,12 +34,13 @@ public class MemoryConversationRepository implements ConversationRepository {
     }
 
     @Override
-    public void append(String userId, ChatMessage message) {
+    public void appendTurn(String userId, ChatMessage userMessage, ChatMessage assistantMessage) {
         Deque<ChatMessage> messages = conversations.computeIfAbsent(
                 userId,
                 ignored -> new ArrayDeque<>());
         synchronized (messages) {
-            messages.addLast(message);
+            messages.addLast(userMessage);
+            messages.addLast(assistantMessage);
             while (messages.size() > maxMessagesPerUser) {
                 messages.removeFirst();
             }
