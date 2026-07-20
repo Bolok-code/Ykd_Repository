@@ -11,8 +11,7 @@ public interface ConversationRepository {
     List<ChatMessage> findByUserId(String userId);
 
     void appendTurn(String userId,
-                ChatMessage userMessage,
-                ChatMessage assistantMessage
+                ConversationTurn   turn
                 );
 
     void clear(String userId);

@@ -64,10 +64,10 @@ public class ChatService {
         messages.add(userMessage);
 
         String answer = aiChatClient.chat(messages);
-        repository.appendTurn(
-                userId,
-                userMessage,
-                ChatMessage.assistant(answer));
+        ChatMessage assistantMessage = ChatMessage.assistant(answer);
+        ConversationTurn turn =
+                ConversationTurn.textChat(userMessage, assistantMessage);
+        repository.appendTurn(userId, turn);
         return answer;
     }
 

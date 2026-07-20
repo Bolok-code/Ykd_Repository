@@ -3,8 +3,6 @@ package com.clitoolbox.conversation;
 import com.clitoolbox.ai.ChatMessage;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.validation.beanvalidation.SpringValidatorAdapter;
-
 import java.util.List;
 
 public class JdbcConversationRepository implements ConversationRepository {
@@ -52,9 +50,10 @@ public class JdbcConversationRepository implements ConversationRepository {
 //新增逻辑
     @Override
     @Transactional
-    public void appendTurn(String userId, ChatMessage userMessage, ChatMessage assistantMessage) {
-      insertMessage(userId, userMessage);
-      insertMessage(userId, assistantMessage);
+    public void appendTurn(String userId,
+                           ConversationTurn turn) {
+      insertMessage(userId, turn.userMessage(),turn);
+      insertMessage(userId, turn.assistantMessage(),turn);
 
     }
     //删除逻辑
@@ -66,17 +65,20 @@ public class JdbcConversationRepository implements ConversationRepository {
                 """;
         jdbcTemplate.update(sql, userId);
     }
-    private void insertMessage(String userId, ChatMessage message) {
+    private void insertMessage(String userId, ChatMessage message, ConversationTurn turn) {
         String sql = """
             INSERT INTO conversation_message
-                (user_id, role, content)
-            VALUES (?, ?, ?)
+                (user_id, role, content,intent,city,target_date)
+            VALUES (?, ?, ?,?,?,?)
             """;
         jdbcTemplate.update(
                 sql,
                 userId,
                 message.role(),
-                message.content()
+                message.content(),
+                turn.intent(),
+                turn.city(),
+                turn.targetDate()
         );
     }
 }
