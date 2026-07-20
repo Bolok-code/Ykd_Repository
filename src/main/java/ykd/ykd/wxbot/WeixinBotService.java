@@ -3,61 +3,45 @@ package ykd.ykd.wxbot;
 import com.github.wechat.ilink.sdk.ILinkClient;
 import com.github.wechat.ilink.sdk.core.listener.OnLoginListener;
 import com.github.wechat.ilink.sdk.core.login.LoginContext;
-import com.github.wechat.ilink.sdk.core.model.CDNMedia;
-import com.github.wechat.ilink.sdk.core.model.MessageItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
-import ykd.ykd.exception.ErrorCode;
-import ykd.ykd.llm.service.LlmService;
+import ykd.ykd.processor.MessageProcessor;
+import ykd.ykd.processor.ProcessResult;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URL;
-import java.util.Base64;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 微信 iLink 智能机器人服务。
  *
- * <p>启动后通过二维码扫码登录微信，监听用户消息，根据消息类型路由到不同 AI 模型：
- * 纯文字走 DeepSeek，包含图片走 Agnes Flash 多模态模型。</p>
+ * <p>启动后通过二维码扫码登录微信，监听用户消息，将消息交由 {@link MessageProcessor} 处理，
+ * 并将处理结果（文本/图片）发送给用户。</p>
  */
 @Slf4j
-
 @Service
 public class WeixinBotService {
 
-    private final LlmService llmService;
-    private final ChatClient deepseekClient;
-    private final ChatClient agnesClient;
+    private final MessageProcessor messageProcessor;
+    private final OnLoginListener onLoginListener;
 
     private ILinkClient client;
     private volatile boolean running = true;
-    private static final Pattern URL_PATTERN = Pattern.compile("https?://[^\\s]+");
 
+    public WeixinBotService(MessageProcessor messageProcessor) {
+        this.messageProcessor = messageProcessor;
+        this.onLoginListener = new OnLoginListener() {
+            @Override
+            public void onLoginSuccess(LoginContext context) {
+                log.info("微信登录成功，botId = {}", context.getBotId());
+            }
 
-    /**
-     * 构造微信机器人服务，注入 LLM 服务及多个 AI 模型客户端。
-     *
-     * @param llmService      编排 AI 对话的 LLM 服务
-     * @param deepseekClient  DeepSeek 纯文字模型客户端
-     * @param agnesClient     Agnes Flash 多模态模型客户端
-     */
-    public WeixinBotService(LlmService llmService,
-                            ChatClient deepseekClient,
-                            ChatClient agnesClient) {
-        this.llmService = llmService;
-        this.deepseekClient = deepseekClient;
-        this.agnesClient = agnesClient;
+            @Override
+            public void onLoginFailure(Throwable throwable) {
+                log.error("微信登录失败: {}", throwable.getMessage());
+            }
+        };
     }
 
     /**
@@ -93,27 +77,11 @@ public class WeixinBotService {
 
     /**
      * 微信机器人主循环，由守护线程 {@code wx-bot} 执行。
-     *
-     * <p>执行流程分为两个阶段：</p>
-     * <ol>
-     *   <li>扫码登录：构建 {@link ILinkClient}，获取二维码并阻塞等待用户扫码确认</li>
-     *   <li>消息轮询：循环调用 {@code getUpdates()} 拉取消息，分发至 {@link #handleMessage(WeixinMessage)} 处理</li>
-     * </ol>
      */
     private void runBot() {
         try {
             client = ILinkClient.builder()
-                    .onLogin(new OnLoginListener() {
-                        @Override
-                        public void onLoginSuccess(LoginContext context) {
-                            log.info("微信登录成功，botId = {}", context.getBotId());
-                        }
-
-                        @Override
-                        public void onLoginFailure(Throwable throwable) {
-                            log.error("微信登录失败: {}", throwable.getMessage());
-                        }
-                    })
+                    .onLogin(onLoginListener)
                     .build();
             String qrCodeContent = client.executeLogin();
             log.info("========================================");
@@ -132,6 +100,8 @@ public class WeixinBotService {
                             handleMessage(msg);
                         }
                     }
+                    // 检查是否有后台完成的视频需要发送
+                    sendCompletedVideo();
                 } catch (Exception e) {
                     if (running) {
                         log.error("消息轮询异常，3秒后重试", e);
@@ -145,56 +115,19 @@ public class WeixinBotService {
     }
 
     /**
-     * 消息调度：根据内容类型选择模型。
-     *
-     * <p>有图片走 Agnes Flash（多模态），纯文字走 DeepSeek。</p>
-     *
-     * @param msg 微信 iLink 消息对象，包含发送者 ID 和消息条目列表
+     * 消息处理入口：委托 {@link MessageProcessor} 处理后发送结果。
      */
     private void handleMessage(WeixinMessage msg) {
-        long start = System.currentTimeMillis();
-        String fromUserId = msg.getFrom_user_id();
-
-        if (msg.getItem_list() == null) {
-            log.info("[Bot] 收到空消息(无item_list): userId={}", fromUserId);
+        ProcessResult result = messageProcessor.process(msg, client);
+        if (result == null) {
             return;
         }
 
-        String text = extractText(msg);
-        String imageDataUri = extractImageDataUri(msg);
-
-        if (text == null && imageDataUri == null) {
-            log.info("[Bot] 不支持的消息类型: userId={}, itemCount={}", fromUserId, msg.getItem_list().size());
-            return;
-        }
-
-        String textPreview = text != null ? (text.length() > 100 ? text.substring(0, 100) + "..." : text) : null;
-        ChatClient aiClient = (imageDataUri != null) ? agnesClient : deepseekClient;
-        String modelName = (imageDataUri != null) ? "Agnes" : "DeepSeek";
-
-        log.info("[Bot] 收到消息: userId={}, model={}, text={}, hasImage={}",
-                fromUserId, modelName, textPreview, imageDataUri != null);
-        try {
-            String reply = llmService.chat(text, imageDataUri, aiClient);
-            long elapsed = System.currentTimeMillis() - start;
-            String replyPreview = reply != null ? (reply.length() > 200 ? reply.substring(0, 200) + "..." : reply) : null;
-            log.info("[Bot] 回复成功: elapsed={}ms, userId={}, reply={}", elapsed, fromUserId, replyPreview);
-            String url = extractUrl(reply);
-            if (url != null) {
-                byte[] imageData = downloadImage(url);
-                if (imageData != null) {
-                    safeSendImage(fromUserId, imageData);
-                } else {
-                    log.warn("[Bot] 图片下载失败，降级发送文字: userId={}", fromUserId);
-                    safeSendText(fromUserId, reply);
-                }
-            } else {
-                safeSendText(fromUserId, reply);
-            }
-        } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - start;
-            log.error("[Bot] 回复失败: elapsed={}ms, userId={}, text={}, error={}", elapsed, fromUserId, text, e.getMessage(), e);
-            safeSendText(fromUserId, "❌ " + ErrorCode.AI_CALL_FAILED.getDefaultMessage());
+        switch (result.type()) {
+            case IMAGE -> safeSendImage(result.userId(), result.data());
+            case VIDEO -> safeSendVideo(result.userId(), result.data());
+            case VOICE -> safeSendVoice(result.userId(), result.data());
+            case TEXT -> safeSendText(result.userId(), result.text());
         }
     }
 
@@ -202,9 +135,6 @@ public class WeixinBotService {
      * 安全发送文本消息。
      *
      * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
-     *
-     * @param userId 微信用户 ID
-     * @param text   待发送的文本内容
      */
     private void safeSendText(String userId, String text) {
         try {
@@ -218,9 +148,6 @@ public class WeixinBotService {
      * 安全发送图片消息。
      *
      * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
-     *
-     * @param userId    微信用户 ID
-     * @param imageData 图片字节数据
      */
     private void safeSendImage(String userId, byte[] imageData) {
         try {
@@ -232,93 +159,44 @@ public class WeixinBotService {
     }
 
     /**
-     * 从图片 URL 下载为字节数组。
+     * 安全发送语音消息。
      *
-     * @param imageUrl 图片 URL
-     * @return 图片字节数据，下载失败返回 {@code null}
+     * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
      */
-    private byte[] downloadImage(String imageUrl) {
-        try (InputStream in = URI.create(imageUrl).toURL().openStream();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) != -1) {
-                out.write(buf, 0, n);
-            }
-            byte[] data = out.toByteArray();
-            log.info("[Bot] 图片下载成功: url={}, size={}KB", imageUrl, data.length / 1024);
-            return data;
+    private void safeSendVoice(String userId, byte[] voiceData) {
+        try {
+            client.sendFile(userId, voiceData, "voice.mp3", "语音消息");
+            log.info("[Bot] 语音文件发送成功: userId={}, size={}KB", userId, voiceData.length / 1024);
         } catch (Exception e) {
-            log.error("下载图片失败: url={}", imageUrl, e);
-            return null;
+            log.error("发送语音失败: userId={}", userId, e);
         }
     }
 
     /**
-     * 从文本中提取第一个 URL。
+     * 安全发送视频消息。
      *
-     * @param text 待匹配文本
-     * @return 匹配到的 URL，无匹配时返回 {@code null}
+     * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
      */
-    private String extractUrl(String text) {
-        if (text == null) {
-            return null;
+    private void safeSendVideo(String userId, byte[] videoData) {
+        try {
+            client.sendVideo(userId, videoData, "video.mp4", 0, "视频");
+            log.info("[Bot] 视频发送成功: userId={}, size={}KB", userId, videoData.length / 1024);
+        } catch (Exception e) {
+            log.error("发送视频失败: userId={}", userId, e);
         }
-        Matcher m = URL_PATTERN.matcher(text);
-        if (m.find()) {
-            String url = m.group();
-            log.info("[Bot] 提取到URL: {}", url);
-            return url;
-        }
-        return null;
     }
-
 
     /**
-     * 从微信消息条目列表中提取第一条文本内容。
-     *
-     * @param msg 微信 iLink 消息对象
-     * @return 提取到的文本字符串，无文本内容时返回 {@code null}
+     * 检查并发送后台完成的视频（来自 {@link ykd.ykd.processor.VideoTaskManager} 异步轮询）。
      */
-    private String extractText(WeixinMessage msg) {
-        for (MessageItem item : msg.getItem_list()) {
-            if (item.getText_item() != null) {
-                return item.getText_item().getText();
-            }
+    private void sendCompletedVideo() {
+        ProcessResult result = messageProcessor.pollCompletedVideo();
+        while (result != null) {
+            log.info("[Bot] 推送后台完成的视频: userId={}", result.userId());
+            safeSendVideo(result.userId(), result.data());
+            result = messageProcessor.pollCompletedVideo();
         }
-        return null;
     }
 
-  /*旧方案为什么不行
-    反射调试已经证实：ImageItem 根本没有 getUrl() 方法。它只有 getMedia()（返回 CDNMedia）、getAeskey()、getThumb_size() 等。微信 iLink 的图片存在 CDN 上，不暴露公网 URL。所以 getUrl() 永远返回 null，整个 extractImageUrl() 形同虚设，纯图片消息进不了图片分支，直接被打上"不支持的消息类型"丢弃了。
-    新方案为什么行
-    走 iLink SDK 的正确路径：CDNMedia → client.downloadMedia() 下载字节 → Base64 编码为 data:image/jpeg;base64,... 传给 AI。URI.create() 原生支持 data: 协议，LlmServiceImpl 无需任何改动。
-*/
-    /**
-     * 从微信消息条目列表中提取第一张图片，下载并转为 base64 data URI。
-     *
-     * @param msg 微信 iLink 消息对象
-     * @return base64 data URI，无图片或下载失败时返回 {@code null}
-     */
-    private String extractImageDataUri(WeixinMessage msg) {
-        for (MessageItem item : msg.getItem_list()) {
-            if (item.getImage_item() != null) {
-                CDNMedia media = item.getImage_item().getMedia();
-                if (media != null) {
-                    byte[] imageBytes = null;
-                    try {
-                        imageBytes = client.downloadMedia(media);
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                    if (imageBytes != null) {
-                        log.info("[Bot] CDN图片下载成功: size={}KB", imageBytes.length / 1024);
-                        return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(imageBytes);
-                    }
-                    log.warn("[Bot] CDN图片下载返回空: userId={}", msg.getFrom_user_id());
-                }
-            }
-        }
-        return null;
-    }
+
 }

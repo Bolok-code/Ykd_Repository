@@ -1,4 +1,4 @@
-﻿﻿HELP.md
+﻿﻿﻿HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
@@ -51,6 +51,12 @@ ilink-creds.json.sync
 
 ### LLM / AI 凭证 ###
 *.llm-creds.*
+
+### 媒体临时文件 ###
+*.silk
+*.m4a
+*.wav
+*.pcm
 
 /ykd/
 
