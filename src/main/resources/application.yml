@@ -1,0 +1,18 @@
+server:
+  port: 9090
+spring:
+  application:
+    name: wechat-weather-bot
+app:
+  amap:
+    api-key: ${AMAP_API_KEY}
+    base-url: https://restapi.amap.com/v3
+  ai:
+    deepseek-key: ${DEEPSEEK_API_KEY}
+    bailian-key: ${BAILIAN_API_KEY}
+logging:
+  level:
+    com.example.wechatbot: DEBUG
+    com.github.wechat: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
