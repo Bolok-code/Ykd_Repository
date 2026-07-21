@@ -28,3 +28,7 @@ spring:
 
 gaode:
   key: changeme
+
+logging:
+  charset:
+    console: GBK
