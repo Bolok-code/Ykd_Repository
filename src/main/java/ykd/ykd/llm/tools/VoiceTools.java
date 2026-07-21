@@ -59,7 +59,7 @@ public class VoiceTools {
             byte[] audio = speechModel.call(new TextToSpeechPrompt(text, options))
                     .getResult().getOutput();
             voiceQueue.add(ProcessResult.voice(audio, userId));
-            log.info("[VoiceTools] 语音合成成功: userId={}, size={}KB", userId, audio.length / 1024);
+
             return "语音已播报";
         } catch (Exception e) {
             log.error("[VoiceTools] 语音合成失败: userId={}, error={}", userId, e.getMessage(), e);
