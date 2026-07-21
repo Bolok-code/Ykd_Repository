@@ -28,42 +28,66 @@ public class VoiceTools {
     private final UserContext userContext;
     private final Queue<ProcessResult> voiceQueue;
     private final String voiceId;
+    private final String malevoiceId;
     private final String model;
 
     public VoiceTools(@Qualifier("elevenLabsSpeechModel") TextToSpeechModel speechModel,
                       UserContext userContext,
                       Queue<ProcessResult> voiceQueue,
                       @Value("${spring.ai.elevenlabs.tts.voice-id}") String voiceId,
+                      @Value("${spring.ai.elevenlabs.tts.male-voice-id}") String malevoiceId,
                       @Value("${spring.ai.elevenlabs.tts.model:eleven_turbo_v2_5}") String model) {
         this.speechModel = speechModel;
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
         this.voiceId = voiceId;
         this.model = model;
+        this.malevoiceId = malevoiceId;
+
+
     }
 
     @Tool(description = "用语音朗读文字。当用户要求用语音回答、朗读、播报、读出来时调用此工具")
     public String speak(
-            @ToolParam(description = "要朗读的文字内容") String text) {
-
+            @ToolParam(description = "要朗读的文字内容") String text,
+            @ToolParam(description = "语音性别：male(男声) 或 female(女声)。用户未指定时传 female", required = false)
+            String gender
+    ) {
         String userId = userContext.getCurrentUserId();
-        log.info("[VoiceTools] 被调用: text={}, userId={}",
-                text.length() > 100 ? text.substring(0, 100) + "..." : text, userId);
+        log.info("[VoiceTools] 被调用: text={}, userId={}, gender={}",
+                text.length() > 100 ? text.substring(0, 100) + "..." : text, userId, gender);
+
+        String selectedVoiceId = resolveVoiceId(gender);
 
         try {
             ElevenLabsTextToSpeechOptions options = ElevenLabsTextToSpeechOptions.builder()
-                    .voiceId(voiceId)
+                    .voiceId(selectedVoiceId)
                     .outputFormat(ElevenLabsApi.OutputFormat.MP3_44100_128.getValue())
                     .modelId(model)
                     .build();
             byte[] audio = speechModel.call(new TextToSpeechPrompt(text, options))
                     .getResult().getOutput();
             voiceQueue.add(ProcessResult.voice(audio, userId));
-            log.info("[VoiceTools] 语音合成成功: userId={}, size={}KB", userId, audio.length / 1024);
+            log.info("[VoiceTools] 语音合成成功: userId={}, voiceId={}, size={}KB",
+                    userId, selectedVoiceId, audio.length / 1024);
             return "语音已播报";
         } catch (Exception e) {
             log.error("[VoiceTools] 语音合成失败: userId={}, error={}", userId, e.getMessage(), e);
             return "❌ " + ErrorCode.TTS_SYNTHESIS_FAILED.getDefaultMessage();
         }
     }
+
+    /**
+     * 根据性别参数选择对应的 ElevenLabs 音色 ID。
+     *
+     * @param gender 性别标识，{@code "male"} 选男声，其他选女声
+     * @return ElevenLabs voice ID
+     */
+    private String resolveVoiceId(String gender) {
+        if ("male".equalsIgnoreCase(gender)) {
+            return malevoiceId;
+        }
+        return voiceId;
+    }
+
 }
