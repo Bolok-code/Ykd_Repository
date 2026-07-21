@@ -24,9 +24,6 @@ public class MessageHandler {
 
     public String processMessage(String content) { return processMessage(content, null); }
 
-    public String processMessage(String content, String userId) {
-        return processMessage(content, null);
-    }
 
     public String processMessage(String content, String userId) {
         if (content == null || content.isEmpty()) {
