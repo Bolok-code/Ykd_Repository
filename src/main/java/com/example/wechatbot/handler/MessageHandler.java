@@ -22,7 +22,9 @@ public class MessageHandler {
         return aiChatService.analyzeImage(imageData);
     }
 
-    public String processMessage(String content) {
+    public String processMessage(String content) { return processMessage(content, null); }
+
+    public String processMessage(String content, String userId) {
         return processMessage(content, null);
     }
 
