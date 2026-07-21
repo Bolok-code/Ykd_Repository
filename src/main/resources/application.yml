@@ -24,6 +24,7 @@ spring:
       base-url: https://api.elevenlabs.io
       tts:
         voice-id: EXAVITQu4vr4xnSDxMaL
+        male-voice-id: pNInz6obpgDQGcFmaJgB
         model: eleven_turbo_v2_5
 
 gaode:
