@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YKD Bot 管理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; width: 420px; }
+        h1 { font-size: 20px; text-align: center; margin-bottom: 24px; color: #333; }
+        .section { margin-bottom: 20px; }
+        .section-title { font-size: 13px; color: #999; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-bottom: 8px; outline: none; transition: border 0.2s; }
+        input:focus { border-color: #4a90d9; }
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; transition: all 0.2s; margin-bottom: 8px; }
+        .btn-primary { background: #4a90d9; color: #fff; }
+        .btn-primary:hover { background: #3a7bc8; }
+        .btn-danger { background: #e74c3c; color: #fff; }
+        .btn-danger:hover { background: #c0392b; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status { text-align: center; padding: 8px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+        .status-ok { background: #d4edda; color: #155724; }
+        .status-off { background: #f8d7da; color: #721c24; }
+        .msg { text-align: center; font-size: 13px; color: #666; margin-top: 8px; min-height: 20px; }
+        #qrArea { text-align: center; margin-top: 12px; }
+        #qrArea img { max-width: 200px; border: 1px solid #eee; border-radius: 8px; }
+        #qrArea a { color: #4a90d9; font-size: 13px; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>YKD Bot 管理面板</h1>
+
+        <div id="statusBar" class="status status-off">未连接</div>
+
+        <div class="section">
+            <div class="section-title">API 密钥</div>
+            <input type="password" id="deepseekKey" placeholder="DeepSeek API Key">
+            <input type="password" id="agnesKey" placeholder="Agnes API Key">
+            <input type="password" id="elevenlabsKey" placeholder="ElevenLabs API Key">
+            <button class="btn btn-primary" onclick="saveKeys()">保存密钥</button>
+        </div>
+
+        <div class="section">
+            <button class="btn btn-primary" id="btnLogin" onclick="doLogin()">扫码登录</button>
+            <button class="btn btn-danger" id="btnDisconnect" onclick="doDisconnect()" disabled>断开连接</button>
+        </div>
+
+        <div class="msg" id="msg"></div>
+        <div id="qrArea"></div>
+    </div>
+
+    <script>
+        const api = (path, opts) => fetch('/api/' + path, opts).then(r => r.json());
+
+        function showMsg(text, isError) {
+            const el = document.getElementById('msg');
+            el.textContent = text;
+            el.style.color = isError ? '#e74c3c' : '#27ae60';
+        }
+
+        async function refreshStatus() {
+            try {
+                const s = await api('bot/status');
+                const bar = document.getElementById('statusBar');
+                const btnLogin = document.getElementById('btnLogin');
+                const btnDisc = document.getElementById('btnDisconnect');
+                if (s.connected) {
+                    bar.className = 'status status-ok';
+                    bar.textContent = '已连接 (Session 已保存)';
+                    btnLogin.disabled = true;
+                    btnDisc.disabled = false;
+                } else {
+                    bar.className = 'status status-off';
+                    bar.textContent = '未连接';
+                    btnLogin.disabled = false;
+                    btnDisc.disabled = true;
+                }
+                if (!s.keysConfigured) {
+                    btnLogin.disabled = true;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function saveKeys() {
+            const dk = document.getElementById('deepseekKey').value.trim();
+            const ak = document.getElementById('agnesKey').value.trim();
+            const ek = document.getElementById('elevenlabsKey').value.trim();
+            if (!dk || !ak || !ek) { showMsg('请填写完整的密钥', true); return; }
+            try {
+                const r = await api('config/keys', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({deepseekApiKey: dk, agnesApiKey: ak, elevenlabsApiKey: ek})
+                });
+                showMsg(r.message, !r.success);
+                if (r.success) refreshStatus();
+            } catch (e) {
+                showMsg('请求失败: ' + e.message, true);
+            }
+        }
+
+        async function doLogin() {
+            showMsg('正在登录...');
+            document.getElementById('qrArea').innerHTML = '';
+            try {
+                const r = await api('bot/login');
+                if (r.success && r.qrUrl) {
+                    showMsg('请扫描二维码登录');
+                    document.getElementById('qrArea').innerHTML =
+                        '<p style="font-size:12px;color:#999;margin-bottom:8px;">微信扫码</p>' +
+                        '<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(r.qrUrl) + '" />' +
+                        '<br><a href="' + r.qrUrl + '" target="_blank">链接直连</a>';
+                } else if (r.success) {
+                    showMsg(r.message || '登录成功');
+                    document.getElementById('qrArea').innerHTML = '';
+                } else {
+                    showMsg(r.message, true);
+                }
+                setTimeout(refreshStatus, 3000);
+            } catch (e) {
+                showMsg('登录请求失败: ' + e.message, true);
+            }
+        }
+
+        async function doDisconnect() {
+            if (!confirm('确定断开连接？')) return;
+            try {
+                const r = await api('bot/disconnect', {method: 'POST'});
+                showMsg(r.message, !r.success);
+                document.getElementById('qrArea').innerHTML = '';
+                refreshStatus();
+            } catch (e) {
+                showMsg('断开失败: ' + e.message, true);
+            }
+        }
+
+        refreshStatus();
+        setInterval(refreshStatus, 10000);
+    </script>
+</body>
+</html>

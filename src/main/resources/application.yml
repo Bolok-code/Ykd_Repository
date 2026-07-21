@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: ykd
+  config:
+    import: optional:file:./config/application-local.yml
+  ai:
+    chat:
+      client:
+        enabled: false
+    openai:
+      api-key: changeme
+      base-url: https://apihub.agnes-ai.com/v1
+      chat:
+        options:
+          model: agnes-2.0-flash
+    deepseek:
+      api-key: changeme
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
+    elevenlabs:
+      api-key: changeme
+      base-url: https://api.elevenlabs.io
+      tts:
+        voice-id: EXAVITQu4vr4xnSDxMaL
+        model: eleven_turbo_v2_5
+
+gaode:
+  key: changeme

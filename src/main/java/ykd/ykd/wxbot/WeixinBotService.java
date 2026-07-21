@@ -1,6 +1,9 @@
 package ykd.ykd.wxbot;
 
+import tools.jackson.databind.ObjectMapper;
 import com.github.wechat.ilink.sdk.ILinkClient;
+import com.github.wechat.ilink.sdk.core.context.ResumeContext;
+import com.github.wechat.ilink.sdk.core.exception.SessionExpiredException;
 import com.github.wechat.ilink.sdk.core.listener.OnLoginListener;
 import com.github.wechat.ilink.sdk.core.login.LoginContext;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
@@ -9,46 +12,47 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import ykd.ykd.processor.MessageProcessor;
+import ykd.ykd.processor.PerUserTaskDispatcher;
 import ykd.ykd.processor.ProcessResult;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.List;
 
 /**
  * 微信 iLink 智能机器人服务。
  *
  * <p>启动后通过二维码扫码登录微信，监听用户消息，将消息交由 {@link MessageProcessor} 处理，
- * 并将处理结果（文本/图片）发送给用户。</p>
+ * 并将处理结果（文本/图片）发送给用户。支持 Session 持久化，重启后自动恢复登录。</p>
  */
 @Slf4j
 @Service
 public class WeixinBotService {
 
+    private static final Path SESSION_FILE = Paths.get("work", "ilink-session.json");
+    private static final long RETRY_DELAY_MS = 2_000L;
+
     private final MessageProcessor messageProcessor;
-    private final OnLoginListener onLoginListener;
+    private final ObjectMapper objectMapper;
+    private final PerUserTaskDispatcher dispatcher;
 
     private ILinkClient client;
     private volatile boolean running = true;
 
-    public WeixinBotService(MessageProcessor messageProcessor) {
+    public WeixinBotService(MessageProcessor messageProcessor, ObjectMapper objectMapper) {
         this.messageProcessor = messageProcessor;
-        this.onLoginListener = new OnLoginListener() {
-            @Override
-            public void onLoginSuccess(LoginContext context) {
-                log.info("微信登录成功，botId = {}", context.getBotId());
-            }
-
-            @Override
-            public void onLoginFailure(Throwable throwable) {
-                log.error("微信登录失败: {}", throwable.getMessage());
-            }
-        };
+        this.objectMapper = objectMapper;
+        this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
 
     /**
      * 启动微信机器人。
      *
-     * <p>Spring Bean 初始化完成后由 {@link PostConstruct} 自动触发，
-     * 通过守护线程异步执行 {@link #runBot()}，避免阻塞容器启动。</p>
+     * <p>优先尝试恢复保存的 Session，若无则生成 QR 码登录。
      */
     @PostConstruct
     public void start() {
@@ -58,54 +62,137 @@ public class WeixinBotService {
     }
 
     /**
-     * 优雅关闭微信机器人服务。
-     *
-     * <p>Spring 容器销毁 Bean 时自动调用：置位 running 标志通知轮询循环退出，
-     * 随后关闭 iLink 客户端释放 HTTP 连接池等资源。</p>
+     * 优雅关闭：停止接收消息 → 排空队列 → 关闭客户端。
      */
     @PreDestroy
     public void stop() {
         running = false;
-        if (client != null) {
-            try {
-                client.close();
-            } catch (Exception e) {
-                log.warn("关闭iLink客户端异常", e);
-            }
+        dispatcher.close(Duration.ofSeconds(15));
+        closeClient();
+    }
+
+    /**
+     * 检查是否有保存的 Session。
+     */
+    public boolean hasSavedSession() {
+        return Files.exists(SESSION_FILE);
+    }
+
+    /**
+     * 删除保存的 Session 文件。
+     */
+    public void deleteSession() {
+        try {
+            Files.deleteIfExists(SESSION_FILE);
+        } catch (IOException e) {
+            log.warn("删除 session 文件失败: {}", e.getMessage());
         }
     }
 
     /**
-     * 微信机器人主循环，由守护线程 {@code wx-bot} 执行。
+     * 触发登录，返回 QR 码 URL（需扫码）或 null（Session 已恢复）。
      */
+    public String login() {
+        if (client != null) {
+            closeClient();
+        }
+
+        ResumeContext resumeContext = loadSession();
+        boolean needLogin = (resumeContext == null);
+
+        client = ILinkClient.builder()
+                .onLogin(new OnLoginListener() {
+                    @Override
+                    public void onLoginSuccess(LoginContext ctx) {
+                        log.info("微信登录成功: botId={}", ctx.getBotId());
+                        if (client != null) {
+                            saveSession(client.exportResumeContext());
+                        }
+                    }
+
+                    @Override
+                    public void onLoginFailure(Throwable throwable) {
+                        log.error("微信登录失败: {}", throwable.getMessage());
+                    }
+                })
+                .build();
+
+        if (resumeContext != null) {
+            client = ILinkClient.builder()
+                    .onLogin(new OnLoginListener() {
+                        @Override
+                        public void onLoginSuccess(LoginContext ctx) {
+                            log.info("Session 恢复成功: botId={}", ctx.getBotId());
+                        }
+
+                        @Override
+                        public void onLoginFailure(Throwable throwable) {
+                            log.error("Session 恢复失败: {}", throwable.getMessage());
+                        }
+                    })
+                    .resumeContext(resumeContext)
+                    .build();
+            log.info("已恢复保存的会话，无需扫码");
+            return null;
+        }
+
+        try {
+            String qrCodeContent = client.executeLogin();
+            log.info("请扫码登录: {}", qrCodeContent);
+            return qrCodeContent;
+        } catch (Exception e) {
+            log.error("获取 QR 码失败", e);
+            return null;
+        }
+    }
+
     private void runBot() {
         try {
-            client = ILinkClient.builder()
-                    .onLogin(onLoginListener)
-                    .build();
-            String qrCodeContent = client.executeLogin();
-            log.info("========================================");
-            log.info("请将以下URL转为二维码后，用微信扫码登录：");
-            log.info("{}", qrCodeContent);
-            log.info("========================================");
+            String qrUrl = login();
+            if (qrUrl != null) {
+                log.info("========================================");
+                log.info("请将以下URL转为二维码后，用微信扫码登录：");
+                log.info("{}", qrUrl);
+                log.info("========================================");
 
-            LoginContext context = client.getLoginFuture().get();
-            log.info("登录完成，botId = {}，开始监听消息...", context.getBotId());
+                LoginContext context = client.getLoginFuture().get();
+                saveSession(client.exportResumeContext());
+                log.info("登录完成，botId = {}，开始监听消息...", context.getBotId());
+            }
 
             while (running) {
                 try {
                     List<WeixinMessage> messages = client.getUpdates();
+                    saveSession(client.exportResumeContext());
                     if (messages != null) {
                         for (WeixinMessage msg : messages) {
                             handleMessage(msg);
                         }
                     }
-                    // 检查是否有后台完成的视频需要发送
                     sendCompletedVideo();
+                } catch (SessionExpiredException e) {
+                    log.warn("会话已过期，请重新登录");
+                    deleteSession();
+                    break;
+                } catch (IOException e) {
+                    if (running) {
+                        log.error("消息轮询异常，{}ms 后重试: {}", RETRY_DELAY_MS, e.getMessage());
+                        try {
+                            Thread.sleep(RETRY_DELAY_MS);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
                 } catch (Exception e) {
                     if (running) {
-                        log.error("消息轮询异常，3秒后重试", e);
-                        Thread.sleep(3000);
+                        log.error("消息轮询异常，{}ms 后重试", RETRY_DELAY_MS, e);
+                        try {
+                            Thread.sleep(RETRY_DELAY_MS);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
                     }
                 }
             }
@@ -115,14 +202,23 @@ public class WeixinBotService {
     }
 
     /**
-     * 消息处理入口：委托 {@link MessageProcessor} 处理后发送结果。
+     * 消息处理入口：通过 PerUserTaskDispatcher 提交任务，保证每用户串行执行。
      */
     private void handleMessage(WeixinMessage msg) {
-        ProcessResult result = messageProcessor.process(msg, client);
-        if (result == null) {
-            return;
+        String userId = msg.getFrom_user_id();
+        boolean accepted = dispatcher.submit(userId, () -> {
+            ProcessResult result = messageProcessor.process(msg, client);
+            if (result == null) {
+                return;
+            }
+            sendResult(result);
+        });
+        if (!accepted) {
+            log.warn("任务队列已满，拒绝用户消息: userId={}", userId);
         }
+    }
 
+    private void sendResult(ProcessResult result) {
         switch (result.type()) {
             case IMAGE -> safeSendImage(result.userId(), result.data());
             case VIDEO -> safeSendVideo(result.userId(), result.data());
@@ -131,63 +227,43 @@ public class WeixinBotService {
         }
     }
 
-    /**
-     * 安全发送文本消息。
-     *
-     * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
-     */
     private void safeSendText(String userId, String text) {
         try {
             client.sendText(userId, text);
         } catch (Exception e) {
-            log.error("发送消息失败: userId={}, text={}", userId, text, e);
+            log.error("[Bot] 发送文本失败: userId={}", userId, e);
         }
     }
 
-    /**
-     * 安全发送图片消息。
-     *
-     * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
-     */
     private void safeSendImage(String userId, byte[] imageData) {
         try {
             client.sendImage(userId, imageData, "image.png", "");
             log.info("[Bot] 图片发送成功: userId={}, size={}KB", userId, imageData.length / 1024);
         } catch (Exception e) {
-            log.error("发送图片失败: userId={}", userId, e);
+            log.error("[Bot] 发送图片失败: userId={}", userId, e);
         }
     }
 
-    /**
-     * 安全发送语音消息。
-     *
-     * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
-     */
     private void safeSendVoice(String userId, byte[] voiceData) {
         try {
             client.sendFile(userId, voiceData, "voice.mp3", "语音消息");
             log.info("[Bot] 语音文件发送成功: userId={}, size={}KB", userId, voiceData.length / 1024);
         } catch (Exception e) {
-            log.error("发送语音失败: userId={}", userId, e);
+            log.error("[Bot] 发送语音失败: userId={}", userId, e);
         }
     }
 
-    /**
-     * 安全发送视频消息。
-     *
-     * <p>异常仅记录日志不向上抛出，确保发送失败不会中断主流程。</p>
-     */
     private void safeSendVideo(String userId, byte[] videoData) {
         try {
             client.sendVideo(userId, videoData, "video.mp4", 0, "视频");
             log.info("[Bot] 视频发送成功: userId={}, size={}KB", userId, videoData.length / 1024);
         } catch (Exception e) {
-            log.error("发送视频失败: userId={}", userId, e);
+            log.error("[Bot] 发送视频失败: userId={}", userId, e);
         }
     }
 
     /**
-     * 检查并发送后台完成的视频（来自 {@link ykd.ykd.processor.VideoTaskManager} 异步轮询）。
+     * 检查并发送后台完成的视频。
      */
     private void sendCompletedVideo() {
         ProcessResult result = messageProcessor.pollCompletedVideo();
@@ -198,5 +274,64 @@ public class WeixinBotService {
         }
     }
 
+    // ===== Session 持久化 =====
 
+    private void saveSession(ResumeContext resumeContext) {
+        if (resumeContext == null || resumeContext.getLoginContext() == null) {
+            return;
+        }
+        LoginContext login = resumeContext.getLoginContext();
+        SessionData data = new SessionData(
+                login.getBotToken(), login.getUserId(), login.getBotId(),
+                login.getBaseUrl(), resumeContext.getUpdatesCursor());
+        try {
+            Files.createDirectories(SESSION_FILE.getParent());
+            Files.writeString(SESSION_FILE, objectMapper.writeValueAsString(data), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.warn("保存 session 失败: {}", e.getMessage());
+        }
+    }
+
+    private ResumeContext loadSession() {
+        if (!Files.exists(SESSION_FILE)) {
+            return null;
+        }
+        try {
+            String json = Files.readString(SESSION_FILE, StandardCharsets.UTF_8);
+            SessionData data = objectMapper.readValue(json, SessionData.class);
+            if (data.botToken() == null || data.botToken().isBlank()
+                    || data.botId() == null || data.botId().isBlank()
+                    || data.baseUrl() == null || data.baseUrl().isBlank()) {
+                log.warn("Session 信息不完整，将重新登录");
+                deleteSession();
+                return null;
+            }
+            LoginContext loginContext = new LoginContext(
+                    data.botToken(), data.userId(), data.botId(), data.baseUrl());
+            return ResumeContext.builder(loginContext)
+                    .updatesCursor(data.updatesCursor())
+                    .build();
+        } catch (Exception e) {
+            log.warn("无法读取 iLink 会话，将重新登录: {}", e.getMessage());
+            deleteSession();
+            return null;
+        }
+    }
+
+    private void closeClient() {
+        ILinkClient current = client;
+        client = null;
+        if (current != null) {
+            try {
+                current.close();
+            } catch (Exception e) {
+                log.warn("关闭 iLink 客户端异常", e);
+            }
+        }
+    }
+
+    private record SessionData(
+            String botToken, String userId, String botId,
+            String baseUrl, String updatesCursor) {
+    }
 }
