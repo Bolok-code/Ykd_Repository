@@ -7,19 +7,15 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
-        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; width: 420px; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; width: 380px; }
         h1 { font-size: 20px; text-align: center; margin-bottom: 24px; color: #333; }
-        .section { margin-bottom: 20px; }
-        .section-title { font-size: 13px; color: #999; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-bottom: 8px; outline: none; transition: border 0.2s; }
-        input:focus { border-color: #4a90d9; }
         .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; transition: all 0.2s; margin-bottom: 8px; }
         .btn-primary { background: #4a90d9; color: #fff; }
         .btn-primary:hover { background: #3a7bc8; }
         .btn-danger { background: #e74c3c; color: #fff; }
         .btn-danger:hover { background: #c0392b; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .status { text-align: center; padding: 8px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+        .status { text-align: center; padding: 8px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
         .status-ok { background: #d4edda; color: #155724; }
         .status-off { background: #f8d7da; color: #721c24; }
         .msg { text-align: center; font-size: 13px; color: #666; margin-top: 8px; min-height: 20px; }
@@ -34,15 +30,7 @@
 
         <div id="statusBar" class="status status-off">未连接</div>
 
-        <div class="section">
-            <div class="section-title">API 密钥</div>
-            <input type="password" id="deepseekKey" placeholder="DeepSeek API Key">
-            <input type="password" id="agnesKey" placeholder="Agnes API Key">
-            <input type="password" id="elevenlabsKey" placeholder="ElevenLabs API Key">
-            <button class="btn btn-primary" onclick="saveKeys()">保存密钥</button>
-        </div>
-
-        <div class="section">
+        <div>
             <button class="btn btn-primary" id="btnLogin" onclick="doLogin()">扫码登录</button>
             <button class="btn btn-danger" id="btnDisconnect" onclick="doDisconnect()" disabled>断开连接</button>
         </div>
@@ -68,7 +56,7 @@
                 const btnDisc = document.getElementById('btnDisconnect');
                 if (s.connected) {
                     bar.className = 'status status-ok';
-                    bar.textContent = '已连接 (Session 已保存)';
+                    bar.textContent = '已连接（Session 已保存）';
                     btnLogin.disabled = true;
                     btnDisc.disabled = false;
                 } else {
@@ -77,29 +65,8 @@
                     btnLogin.disabled = false;
                     btnDisc.disabled = true;
                 }
-                if (!s.keysConfigured) {
-                    btnLogin.disabled = true;
-                }
             } catch (e) {
                 console.error(e);
-            }
-        }
-
-        async function saveKeys() {
-            const dk = document.getElementById('deepseekKey').value.trim();
-            const ak = document.getElementById('agnesKey').value.trim();
-            const ek = document.getElementById('elevenlabsKey').value.trim();
-            if (!dk || !ak || !ek) { showMsg('请填写完整的密钥', true); return; }
-            try {
-                const r = await api('config/keys', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({deepseekApiKey: dk, agnesApiKey: ak, elevenlabsApiKey: ek})
-                });
-                showMsg(r.message, !r.success);
-                if (r.success) refreshStatus();
-            } catch (e) {
-                showMsg('请求失败: ' + e.message, true);
             }
         }
 
