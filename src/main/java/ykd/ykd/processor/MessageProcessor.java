@@ -8,7 +8,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
-import ykd.ykd.exception.ErrorCode;
+import ykd.ykd.exception.GlobalExceptionHandler;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.processor.VideoTaskManager;
 
@@ -51,6 +51,7 @@ public class MessageProcessor {
     private final ChatClient deepseekClient;
     private final ChatClient agnesClient;
     private final VideoTaskManager videoTaskManager;
+    private final UserContext userContext;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> voiceQueue;
 
@@ -58,11 +59,13 @@ public class MessageProcessor {
                             ChatClient deepseekClient,
                             ChatClient agnesClient,
                             VideoTaskManager videoTaskManager,
+                            UserContext userContext,
                             Queue<ProcessResult> voiceQueue) {
         this.llmService = llmService;
         this.deepseekClient = deepseekClient;
         this.agnesClient = agnesClient;
         this.videoTaskManager = videoTaskManager;
+        this.userContext = userContext;
         this.voiceQueue = voiceQueue;
     }
 
@@ -126,34 +129,43 @@ public class MessageProcessor {
         log.info("[Processor] 收到消息: userId={}, model={}, text={}, hasImage={}",
                 fromUserId, modelName, textPreview, imageDataUri != null);
 
-        videoTaskManager.setCurrentUserId(fromUserId);
-        try {
-            String reply = llmService.chat(text, imageDataUri, aiClient, fromUserId);
-            long elapsed = System.currentTimeMillis() - start;
-            String replyPreview = reply != null ? (reply.length() > 200 ? reply.substring(0, 200) + "..." : reply) : null;
-            log.info("[Processor] 回复成功: elapsed={}ms, userId={}, reply={}", elapsed, fromUserId, replyPreview);
+        var result = new ProcessResult[1];
+        String finalText = text;
+        userContext.executeAs(fromUserId, () -> {
+            try {
+                String reply = llmService.chat(finalText, imageDataUri, aiClient, fromUserId);
+                long elapsed = System.currentTimeMillis() - start;
+                String replyPreview = reply != null ? (reply.length() > 200 ? reply.substring(0, 200) + "..." : reply) : null;
+                log.info("[Processor] 回复成功: elapsed={}ms, userId={}, reply={}", elapsed, fromUserId, replyPreview);
 
-            ProcessResult voiceResult = voiceQueue.poll();
-            if (voiceResult != null) {
-                return voiceResult;
-            }
-
-            String url = extractUrl(reply);
-            if (url != null) {
-                byte[] imageData = downloadImage(url);
-                if (imageData != null) {
-                    return ProcessResult.image(imageData, fromUserId);
+                /*
+                 * 回复结果优先级：语音 > 图片 > 文字。
+                 * VoiceTools.speak() 在 chat() 内部同步执行，音频在 chat() 返回时必定已入队，
+                 * poll() 非阻塞获取，有则直接返回 VOICE 类型。
+                 */
+                ProcessResult voiceResult = voiceQueue.poll();
+                if (voiceResult != null) {
+                    result[0] = voiceResult;
+                    return;
                 }
-                log.warn("[Processor] 图片下载失败，降级发送文字: userId={}", fromUserId);
+
+                String url = extractUrl(reply);
+                if (url != null) {
+                    byte[] imageData = downloadImage(url);
+                    if (imageData != null) {
+                        result[0] = ProcessResult.image(imageData, fromUserId);
+                        return;
+                    }
+                    log.warn("[Processor] 图片下载失败，降级发送文字: userId={}", fromUserId);
+                }
+                result[0] = ProcessResult.text(reply, fromUserId);
+            } catch (Exception e) {
+                long elapsed = System.currentTimeMillis() - start;
+                log.error("[Processor] 回复失败: elapsed={}ms, userId={}, text={}, error={}", elapsed, fromUserId, finalText, e.getMessage(), e);
+                result[0] = ProcessResult.text(GlobalExceptionHandler.toUserMessage(e), fromUserId);
             }
-            return ProcessResult.text(reply, fromUserId);
-        } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - start;
-            log.error("[Processor] 回复失败: elapsed={}ms, userId={}, text={}, error={}", elapsed, fromUserId, text, e.getMessage(), e);
-            return ProcessResult.text("❌ " + ErrorCode.AI_CALL_FAILED.getDefaultMessage(), fromUserId);
-        } finally {
-            videoTaskManager.clearCurrentUserId();
-        }
+        });
+        return result[0];
     }
 
     /**

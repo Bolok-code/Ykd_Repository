@@ -32,9 +32,6 @@ public class VideoTaskManager {
     private final Map<String, VideoTask> tasks = new ConcurrentHashMap<>();
     private volatile boolean running = true;
 
-    /** 当前正在处理消息的用户 ID，由 MessageProcessor 在调用 LLM 前设置 */
-    private final ThreadLocal<String> currentUserId = new ThreadLocal<>();
-
     /** 完成回调，由 MessageProcessor 在初始化时设置为入队操作 */
     private Consumer<ProcessResult> onCompleted;
 
@@ -69,12 +66,6 @@ public class VideoTaskManager {
         tasks.put(taskId, new VideoTask(taskId, userId, System.currentTimeMillis()));
         log.info("[VideoTaskManager] 注册任务: taskId={}, userId={}", taskId, userId);
     }
-
-    // === ThreadLocal 用户上下文 ===
-
-    public void setCurrentUserId(String userId) { currentUserId.set(userId); }
-    public String getCurrentUserId() { return currentUserId.get(); }
-    public void clearCurrentUserId() { currentUserId.remove(); }
 
     // === 后台轮询 ===
 

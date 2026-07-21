@@ -10,8 +10,9 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.processor.ProcessResult;
-import ykd.ykd.processor.VideoTaskManager;
+import ykd.ykd.processor.UserContext;
 
 import java.util.Queue;
 
@@ -24,18 +25,18 @@ import java.util.Queue;
 public class VoiceTools {
 
     private final TextToSpeechModel speechModel;
-    private final VideoTaskManager videoTaskManager;
+    private final UserContext userContext;
     private final Queue<ProcessResult> voiceQueue;
     private final String voiceId;
     private final String model;
 
     public VoiceTools(@Qualifier("elevenLabsSpeechModel") TextToSpeechModel speechModel,
-                      VideoTaskManager videoTaskManager,
+                      UserContext userContext,
                       Queue<ProcessResult> voiceQueue,
                       @Value("${spring.ai.elevenlabs.tts.voice-id}") String voiceId,
                       @Value("${spring.ai.elevenlabs.tts.model:eleven_turbo_v2_5}") String model) {
         this.speechModel = speechModel;
-        this.videoTaskManager = videoTaskManager;
+        this.userContext = userContext;
         this.voiceQueue = voiceQueue;
         this.voiceId = voiceId;
         this.model = model;
@@ -45,7 +46,7 @@ public class VoiceTools {
     public String speak(
             @ToolParam(description = "要朗读的文字内容") String text) {
 
-        String userId = videoTaskManager.getCurrentUserId();
+        String userId = userContext.getCurrentUserId();
         log.info("[VoiceTools] 被调用: text={}, userId={}",
                 text.length() > 100 ? text.substring(0, 100) + "..." : text, userId);
 
@@ -62,7 +63,7 @@ public class VoiceTools {
             return "语音已播报";
         } catch (Exception e) {
             log.error("[VoiceTools] 语音合成失败: userId={}, error={}", userId, e.getMessage(), e);
-            return "语音合成失败：" + e.getMessage();
+            return "❌ " + ErrorCode.TTS_SYNTHESIS_FAILED.getDefaultMessage();
         }
     }
 }

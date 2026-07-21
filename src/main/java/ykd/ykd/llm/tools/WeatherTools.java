@@ -26,7 +26,7 @@ public class WeatherTools {
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - start;
             log.error("[WeatherTool] 查询失败: elapsed={}ms, city={}, error={}", elapsed, city, e.getMessage(), e);
-            return ErrorCode.AI_WEATHER_FAILED.getDefaultMessage();
+            return "❌ " + ErrorCode.AI_WEATHER_FAILED.getDefaultMessage();
         }
     }
 }

@@ -7,6 +7,7 @@ import org.springframework.ai.openai.OpenAiImageOptions;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import ykd.ykd.exception.ErrorCode;
 
 @Slf4j
 @Component
@@ -39,7 +40,7 @@ public class ImageTools {
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - start;
             log.error("[ImageTool] 生成失败: elapsed={}ms, prompt={}, error={}", elapsed, prompt, e.getMessage(), e);
-            return "生图失败：" + e.getMessage();
+            return "❌ " + ErrorCode.IMAGE_GENERATE_FAILED.getDefaultMessage();
         }
     }
 }

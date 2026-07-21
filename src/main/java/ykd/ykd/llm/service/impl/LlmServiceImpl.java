@@ -39,6 +39,7 @@ public class LlmServiceImpl implements LlmService {
     @Override
     public String chat(String text, String imageUrl, ChatClient client, String userId) {
         long start = System.currentTimeMillis();
+
         if ((text == null || text.isBlank()) && imageUrl != null) {
             text = "请描述这张图片";
         }
