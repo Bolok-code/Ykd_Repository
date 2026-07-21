@@ -10,6 +10,8 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import ykd.ykd.exception.BusinessException;
+import ykd.ykd.exception.ErrorCode;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -111,7 +113,8 @@ public class VideoService {
             return data;
         } catch (Exception e) {
             log.error("[VideoService] 视频下载失败: url={}", videoUrl, e);
-            return null;
+            throw new BusinessException(ErrorCode.VIDEO_DOWNLOAD_FAILED, e.getMessage());
         }
     }
+
 }

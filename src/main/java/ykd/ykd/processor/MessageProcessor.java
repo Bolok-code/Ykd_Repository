@@ -8,6 +8,8 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
+import ykd.ykd.exception.BusinessException;
+import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.exception.GlobalExceptionHandler;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.processor.VideoTaskManager;
@@ -202,7 +204,7 @@ public class MessageProcessor {
                     try {
                         imageBytes = client.downloadMedia(media);
                     } catch (IOException e) {
-                        throw new RuntimeException(e);
+                        throw new BusinessException(ErrorCode.CDN_DOWNLOAD_FAILED, e.getMessage());
                     }
                     if (imageBytes != null) {
                         log.info("[Processor] CDN图片下载成功: size={}KB", imageBytes.length / 1024);

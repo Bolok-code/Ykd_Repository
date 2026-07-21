@@ -20,7 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * 语音服务：STT（微信 SILK → ElevenLabs 识别）。//已放用 ilinksdk 语音转文字自动支持
+ * 语音服务：STT（微信 SILK → ElevenLabs 识别）。//已放弃使用 ilinksdk 语音转文字自动支持
  */
 @Slf4j
 @Service

@@ -1,57 +1,60 @@
-# Ykd 项目技术文档
+# YKD Bot 技术文档
 
-> 基于 Spring Boot 4.1.0 + JDK 21 的 AI 微信机器人项目，集成 DeepSeek / Agnes AI 大模型与高德天气 API。
-
----
-
-## 目录
-
-1. [项目概述](#1-项目概述)
-2. [技术栈](#2-技术栈)
-3. [项目结构](#3-项目结构)
-4. [模块详解](#4-模块详解)
-   - [4.1 应用入口](#41-应用入口)
-   - [4.2 微信机器人 (wxbot)](#42-微信机器人-wxbot)
-   - [4.3 LLM 服务 (llm)](#43-llm-服务-llm)
-   - [4.4 天气服务 (weather)](#44-天气服务-weather)
-   - [4.5 异常处理 (exception)](#45-异常处理-exception)
-5. [核心调用链路](#5-核心调用链路)
-   - [5.1 文本聊天流程](#51-文本聊天流程)
-   - [5.2 图片生成流程](#52-图片生成流程)
-   - [5.3 天气查询流程](#53-天气查询流程)
-6. [配置说明](#6-配置说明)
-7. [API 接口](#7-api-接口)
+> Spring Boot 4.1 + JDK 21 + Spring AI 2.0 微信智能机器人
 
 ---
 
 ## 1. 项目概述
 
-Ykd 是一个集成微信聊天机器人与 AI 大模型能力的 Java 服务端应用。用户通过微信扫码登录机器人后，可以：
+YKD Bot 是一个集成微信 iLink 的 AI 智能机器人，用户通过微信扫码即可使用：
 
-- **AI 对话**：与 DeepSeek 大模型进行文本对话
-- **图片生成**：通过 Agnes AI 生成图片（基于文本描述）
-- **图片理解**：发送图片给机器人，由 Agnes Flash 多模态模型识别
-- **天气查询**：通过高德 API 查询实时天气
+- **AI 对话** — DeepSeek + Agnes Flash 双模型驱动
+- **图片生成** — Agnes Image 文生图
+- **图片理解** — 发送图片，AI 识别描述
+- **语音播报** — ElevenLabs TTS，文字转语音回复
+- **视频生成** — 异步视频生成，后台完成后推送
+- **天气查询** — 高德 API 实时/预报天气
+- **对话记忆** — 40 条滑动窗口上下文，按用户隔离
+- **Web 管理** — 浏览器打开 `http://localhost:8080` 扫码/配置密钥
+- **Session 恢复** — 重启无需重新扫码，自动恢复登录
 
 ### 架构总览
 
 ```
+浏览器 (Web 面板)
+    │ POST /api/config/keys → RuntimeConfig
+    │ GET /api/bot/login    → QR 码
+    │
 微信客户端
     │
     ▼
-┌──────────────────┐     ┌─────────────────────┐     ┌──────────────────┐
-│  WeixinBot       │────▶│    LlmService       │────▶│  DeepSeek        │
-│  (iLink SDK)     │     │  (ChatClient 编排)   │     │  (文本对话)       │
-└──────────────────┘     │                     │     └──────────────────┘
-        │                │  .tools() 注册工具   │     ┌──────────────────┐
-        ▼                │                     │────▶│  Agnes Flash      │
-┌──────────────────┐     │  ┌──────────────┐   │     │  (多模态对话)     │
-│ 高德天气 API     │     │  │ WeatherTools │   │     └──────────────────┘
-│  (实时/预报)      │     │  └──────┬───────┘   │     ┌──────────────────┐
-└──────────────────┘     │  ┌──────────────┐   │────▶│  Agnes Image     │
-                         │  │  ImageTools  │   │     │  (图片生成)       │
-                         │  └──────────────┘   │     └──────────────────┘
-                         └─────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  WeixinBotService (iLink SDK)                            │
+│  ├── Session 持久化 (work/ilink-session.json)             │
+│  ├── PerUserTaskDispatcher (每用户串行, 跨用户并行)        │
+│  └── sendCompletedVideo() 异步视频推送                    │
+└────────────┬─────────────────────────────────────────────┘
+             │
+             ▼
+┌──────────────────────────────────────────────────────────┐
+│  MessageProcessor                                        │
+│  ├── extractText / extractImageDataUri / extractVoiceText │
+│  ├── 路由: 有图→Agnes, 纯文本→DeepSeek                    │
+│  └── UserContext (ThreadLocal userId 传递)                │
+└────────────┬─────────────────────────────────────────────┘
+             │
+             ▼
+┌──────────────────────────────────────────────────────────┐
+│  LlmServiceImpl                                          │
+│  ├── MemoryManagerService.getHistory() 加载上下文          │
+│  ├── ChatClient.prompt().tools(4 个 @Tool).call()         │
+│  └── MemoryManagerService.save() 保存对话                  │
+└────────┬─────────────────────────────────────────────────┘
+         │  LLM 自主决定调用工具
+         ├── WeatherTools → WeatherService → 高德 API
+         ├── ImageTools  → OpenAiImageModel → Agnes Image
+         ├── VoiceTools  → ElevenLabs TTS → voiceQueue
+         └── VideoTools  → VideoService → VideoTaskManager (异步)
 ```
 
 ---
@@ -62,16 +65,15 @@ Ykd 是一个集成微信聊天机器人与 AI 大模型能力的 Java 服务端
 |------|------|------|
 | 框架 | Spring Boot | 4.1.0 |
 | JDK | Java | 21 |
-| 构建 | Maven | 3.9.11 (Wrapper) |
+| 构建 | Maven Wrapper | 3.9+ |
 | AI 框架 | Spring AI | 2.0.0 |
-| 文本模型 | DeepSeek Chat | deepseek-chat |
-| 多模态模型 | Agnes AI Flash | agnes-2.0-flash |
-| 图片生成模型 | Agnes AI Image | agnes-image-2.1-flash |
+| 文本模型 | DeepSeek | deepseek-chat |
+| 多模态模型 | Agnes Flash | agnes-2.0-flash |
+| 图片生成 | Agnes Image | agnes-image-2.1-flash |
+| 语音合成 | ElevenLabs TTS | eleven_turbo_v2_5 |
+| 语音识别 | ElevenLabs STT | scribe_v1 |
 | 微信 SDK | wechat-ilink-sdk | 2.3.3 |
 | 天气 API | 高德开放平台 | v3 |
-| JSON 处理 | Jackson | (Spring Boot 内置) |
-| HTTP 客户端 | RestTemplate | (Spring 内置) |
-| 工具类 | Lombok | (编译期注解) |
 
 ---
 
@@ -79,556 +81,346 @@ Ykd 是一个集成微信聊天机器人与 AI 大模型能力的 Java 服务端
 
 ```
 ykd-repository/
-├── pom.xml                              # Maven 项目配置
-├── mvnw / mvnw.cmd                      # Maven Wrapper
-├── README.md                            # 项目说明
-├── .gitignore                           # Git 忽略规则
-│
-└── src/
-    ├── main/
-    │   ├── java/ykd/ykd/
-    │   │   ├── YkdApplication.java                  # Spring Boot 启动类
-    │   │   │
-    │   │   ├── llm/
-    │   │   │   ├── config/
-    │   │   │   │   └── ChatClientConfig.java         # ChatClient Bean 配置
-    │   │   │   ├── service/
-    │   │   │   │   ├── LlmService.java               # LLM 服务接口
-    │   │   │   │   └── impl/
-    │   │   │   │       └── LlmServiceImpl.java        # LLM 服务实现
-    │   │   │   └── tools/
-    │   │   │       ├── ImageTools.java                # 图片生成 @Tool
-    │   │   │       └── WeatherTools.java              # 天气查询 @Tool
-    │   │   │
-    │   │   ├── weather/
-    │   │   │   ├── config/
-    │   │   │   │   └── RestTemplateConfig.java        # RestTemplate Bean
-    │   │   │   ├── api/
-    │   │   │   │   ├── WeatherController.java         # 天气 REST 接口
-    │   │   │   │   └── dto/
-    │   │   │   │       ├── WeatherRequest.java        # 请求 DTO
-    │   │   │   │       ├── WeatherResponse.java       # 响应 DTO
-    │   │   │   │       └── ForecastDay.java           # 预报 DTO
-    │   │   │   └── service/
-    │   │   │       ├── WeatherService.java            # 天气服务接口
-    │   │   │       └── impl/
-    │   │   │           └── WeatherServiceImpl.java     # 天气服务实现
-    │   │   │
-    │   │   ├── wxbot/
-    │   │   │   └── WeixinBotService.java              # 微信机器人服务
-    │   │   │
-    │   │   └── exception/
-    │   │       ├── ErrorCode.java                     # 错误码枚举
-    │   │       ├── BusinessException.java             # 业务异常
-    │   │       └── GlobalExceptionHandler.java        # 全局异常处理器
+├── pom.xml
+├── config/
+│   └── application-local.yml.example    # 本地密钥模板
+└── src/main/
+    ├── java/ykd/ykd/
+    │   ├── YkdApplication.java          # 启动类
+    │   ├── BotController.java           # Web 管理 REST API
     │   │
-    │   └── resources/
-    │       └── application.properties                 # 应用配置
+    │   ├── llm/
+    │   │   ├── config/
+    │   │   │   └── ChatClientConfig.java    # ChatClient Bean 配置
+    │   │   ├── service/
+    │   │   │   ├── LlmService.java          # LLM 服务接口
+    │   │   │   ├── VoiceService.java        # STT (SILK→PCM→WAV→ElevenLabs)
+    │   │   │   ├── VideoService.java        # 异步视频生成
+    │   │   │   └── impl/
+    │   │   │       └── LlmServiceImpl.java   # LLM 服务实现
+    │   │   └── tools/
+    │   │       ├── WeatherTools.java        # @Tool 天气查询
+    │   │       ├── ImageTools.java           # @Tool 图片生成
+    │   │       ├── VoiceTools.java           # @Tool 语音合成
+    │   │       └── VideoTools.java           # @Tool 视频生成（异步）
+    │   │
+    │   ├── memory/
+    │   │   ├── MemoryConfig.java            # ChatMemory Bean (40条窗口)
+    │   │   └── MemoryManagerService.java    # 对话记忆 CRUD
+    │   │
+    │   ├── processor/
+    │   │   ├── MessageProcessor.java        # 消息提取/路由/编排
+    │   │   ├── ProcessResult.java           # TEXT/IMAGE/VOICE/VIDEO 结果
+    │   │   ├── UserContext.java             # ThreadLocal userId
+    │   │   ├── VideoTaskManager.java        # 异步视频轮询
+    │   │   └── PerUserTaskDispatcher.java   # 并发任务调度
+    │   │
+    │   ├── weather/
+    │   │   ├── api/
+    │   │   │   ├── WeatherController.java   # REST: /weather/search
+    │   │   │   └── dto/                     # Request/Response DTO
+    │   │   ├── config/RestTemplateConfig.java
+    │   │   └── service/WeatherService.java
+    │   │
+    │   ├── wxbot/
+    │   │   └── WeixinBotService.java        # iLink 生命周期 + 消息循环
+    │   │
+    │   ├── config/
+    │   │   └── RuntimeConfig.java           # 运行时密钥存储
+    │   │
+    │   └── exception/
+    │       ├── ErrorCode.java
+    │       ├── BusinessException.java
+    │       └── GlobalExceptionHandler.java
     │
-    └── test/java/ykd/ykd/
-        └── YkdApplicationTests.java                   # 启动上下文测试
+    └── resources/
+        ├── application.yml                 # 主配置（占位符）
+        ├── static/index.html               # Web 管理面板
+        └── native/                         # SILK 编解码器
 ```
 
 ---
 
 ## 4. 模块详解
 
-### 4.1 应用入口
+### 4.1 微信机器人 (wxbot)
 
-**文件**: `YkdApplication.java`
+**WeixinBotService** — iLink 客户端生命周期管理
 
-```java
-@SpringBootApplication
-public class YkdApplication {
-    public static void main(String[] args) {
-        SpringApplication.run(YkdApplication.class, args);
-    }
-}
-```
-
-标准 Spring Boot 启动类，`@SpringBootApplication` 启用自动配置和组件扫描。
-
----
-
-### 4.2 微信机器人 (wxbot)
-
-**文件**: `WeixinBotService.java`
-
-核心类，负责微信消息的接收、路由和回复。
-
-#### 依赖注入
-
-```java
-public WeixinBotService(LlmService llmService,
-                        ChatClient deepseekClient,
-                        ChatClient agnesClient)
-```
-
-注入三个 Bean：
-- `LlmService` — AI 对话编排服务
-- `deepseekClient` — DeepSeek 文本模型客户端
-- `agnesClient` — Agnes Flash 多模态模型客户端
-
-#### 启动生命周期
+#### 启动流程
 
 ```
 @PostConstruct start()
-    └─ 创建守护线程 "wx-bot" → runBot()
-        ├─ 构建 ILinkClient
-        ├─ 调用 client.executeLogin() 获取二维码
-        ├─ 等待用户扫码登录 (client.getLoginFuture().get())
-        └─ 进入轮询循环:
-            └─ client.getUpdates() → handleMessage(msg)
-
-@PreDestroy stop()
-    └─ running = false → 轮询退出 → client.close()
+  └─ 守护线程 wx-bot → runBot()
+      ├─ loadSession() → 有则恢复，无需扫码
+      ├─ login() → 无保存 Session → 打印 QR 码
+      ├─ client.getLoginFuture().get() → 等待扫码
+      ├─ saveSession() → 持久化到 work/ilink-session.json
+      └─ while(running):
+          ├─ client.getUpdates() → 消息列表
+          ├─ saveSession() → 每条消息后保存 cursor
+          ├─ handleMessage(msg) → PerUserTaskDispatcher.submit()
+          └─ sendCompletedVideo() → 异步视频推送
 ```
 
-#### 消息处理
+#### Session 持久化
 
-**`handleMessage(WeixinMessage msg)`** 是消息路由核心：
+`work/ilink-session.json` 保存 botToken、userId、botId、baseUrl、updatesCursor。重启后自动恢复，无需重新扫码。该文件在 .gitignore 中。
+
+#### PerUserTaskDispatcher
+
+- 每用户串行（同用户消息按序处理）
+- 跨用户并行（不同用户同时处理）
+- 配置：8 线程，100 总容量，5 条/用户
+- 队列满时拒绝新消息并记日志
+
+---
+
+### 4.2 消息处理 (processor)
+
+**MessageProcessor** — 消息提取、模型路由、结果编排
 
 ```
-收到微信消息
-    │
-    ├── extractText(msg) → 提取文本
-    ├── extractImageDataUri(msg) → 下载 CDN 图片 → base64 data URI
-    │
-    ├── 有图片 → 使用 agnesClient
-    └── 无图片 → 使用 deepseekClient
-            │
-            ▼
-    llmService.chat(text, imageDataUri, client)
-            │
-            ▼
-    处理回复:
-    ├── extractUrl(reply) 发现 URL → downloadImage(url) → safeSendImage()
-    └── 无 URL → safeSendText(reply)
+process(msg, client)
+  ├── extractVoiceText(msg)    → iLink 语音转文字
+  ├── extractText(msg)         → MessageItem.text_item
+  ├── extractImageDataUri(msg) → CDNMedia → base64 data URI
+  │
+  ├── 路由: hasImage ? agnesClient : deepseekClient
+  ├── UserContext.executeAs(userId, () -> {
+  │       reply = llmService.chat(text, imageUri, client, userId)
+  │       voiceResult = voiceQueue.poll()  → 优先级最高
+  │       imageUrl = extractUrl(reply)     → 优先级第二
+  │       fallback → ProcessResult.text()
+  │   })
+  └── return ProcessResult
 ```
 
-#### 关键方法
+**ProcessResult** — 统一结果封装
 
-| 方法 | 作用 |
-|------|------|
-| `extractText()` | 从 `MessageItem` 列表中提取文本 |
-| `extractImageDataUri()` | 通过 `CDNMedia → client.downloadMedia()` 下载图片，编码为 `data:image/jpeg;base64,...` |
-| `extractUrl()` | 正则 `https?://\S+` 提取图片 URL |
-| `downloadImage()` | HTTP GET 下载图片为字节数组 |
-| `safeSendText()` | 异常安全的文本发送 |
-| `safeSendImage()` | 异常安全的图片发送 |
+```java
+public record ProcessResult(Type type, String text, byte[] data, String userId) {
+    enum Type { TEXT, IMAGE, VIDEO, VOICE }
+}
+```
 
-#### 图片提取演进说明
+**UserContext** — ThreadLocal 传递 userId 给 @Tool 方法
 
-> **旧方案问题**: `ImageItem.getUrl()` 方法不存在（iLink SDK 图片存储在 CDN，不暴露公网 URL），纯图片消息会被丢弃。
->
-> **新方案**: 通过 `CDNMedia → client.downloadMedia()` 下载字节 → Base64 编码为 data URI 传给 AI。`URI.create()` 原生支持 `data:` 协议，无需改动 `LlmServiceImpl`。
+**VideoTaskManager** — 守护线程每 5 秒轮询待完成的视频任务，完成后通过回调入队。
 
 ---
 
 ### 4.3 LLM 服务 (llm)
 
-#### 4.3.1 ChatClient 配置
+#### ChatClientConfig
 
-**文件**: `ChatClientConfig.java`
+两个 ChatClient Bean，注入不同的 System Prompt：
 
-由于 `spring.ai.chat.client.enabled=false` 禁用了自动配置，手动定义两个 `ChatClient` Bean：
+| Bean | 模型 | 用途 |
+|------|------|------|
+| `deepseekClient` | DeepSeekChatModel | 文本对话 + 工具调用 |
+| `agnesClient` | OpenAiChatModel → Agnes Flash | 多模态图片理解 |
 
-**deepseekClient** (文本对话):
-- 包装 `DeepSeekChatModel` → 调用 `deepseek-chat` 模型
-- System prompt 包含工具使用说明
-
-**agnesClient** (多模态对话):
-- 包装 `OpenAiChatModel` → 调用 `agnes-2.0-flash` 模型
-- System prompt 额外包含参考图片传参说明
-
-#### 4.3.2 LlmService 接口
+#### LlmServiceImpl
 
 ```java
-public interface LlmService {
-    String chat(String text, String imageUrl, ChatClient client);
-}
-```
-
-三个参数：
-- `text` — 用户文本输入
-- `imageUrl` — 可选图片 data URI（纯文本时为 null）
-- `client` — 使用的 ChatClient（deepseekClient 或 agnesClient）
-
-#### 4.3.3 LlmServiceImpl 实现
-
-```java
-public String chat(String text, String imageUrl, ChatClient client) {
-    // 纯图片无文字时，使用默认提示词
-    if (text.isBlank() && imageUrl != null) text = "请描述这张图片";
-
-    return client.prompt()
+public String chat(String text, String imageUrl, ChatClient client, String userId) {
+    List<Message> history = memoryManagerService.getHistory(userId);
+    String content = client.prompt()
+        .messages(history)
         .user(userSpec -> {
-            userSpec.text(finalText);
-            if (imageUrl != null) {
-                userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
-            }
+            userSpec.text(text);
+            if (imageUrl != null) userSpec.media(...);
         })
-        .tools(weatherTools, imageTools)    // 注册 @Tool 工具
-        .call()
-        .content();
+        .tools(weatherTools, imageTools, videoTools, voiceTools)
+        .call().content();
+    memoryManagerService.save(userId, text, content);
+    return content;
 }
 ```
 
-核心功能：
-1. 组装 user prompt（文本 + 可选的图片 media）
-2. 注册 `WeatherTools` 和 `ImageTools` 两个工具
-3. 等待 LLM 回复（LLM 自主决定是否调用工具）
+#### @Tool 工具
 
-#### 4.3.4 工具 (Tools)
+| 工具 | 触发条件 | 实现 |
+|------|----------|------|
+| `WeatherTools.getWeather(city)` | 用户问天气 | 高德 API 实时天气 |
+| `ImageTools.generateImage(prompt, refUrl)` | 要求画图/生成图片 | Agnes Image API 1024×1024 |
+| `VoiceTools.speak(text)` | 要求朗读/语音回复 | ElevenLabs TTS → voiceQueue |
+| `VideoTools.generateVideo(prompt)` | 要求生成视频 | Agnes Video 异步 → VideoTaskManager |
 
-##### ImageTools — 图片生成
-
-```java
-@Component
-public class ImageTools {
-    private final OpenAiImageModel agnesImageModel;  // 自动配置
-
-    @Tool(description = "生成图片并返回图片URL...")
-    public String generateImage(
-            @ToolParam(description = "图片描述") String prompt,
-            @ToolParam(description = "参考图片URL", required = false) String imageUrl) {
-
-        ImagePrompt imagePrompt = new ImagePrompt(prompt,
-            OpenAiImageOptions.builder()
-                .model("agnes-image-2.1-flash")
-                .height(1024).width(1024)
-                .build());
-
-        var response = agnesImageModel.call(imagePrompt);
-        return "图片已生成，请在回复中原样输出以下URL：\n"
-            + response.getResult().getOutput().getUrl();
-    }
-}
-```
-
-- 使用 `OpenAiImageModel`（Spring AI 自动配置，复用 `spring.ai.openai.*` 配置）
-- 实际调用：`POST https://apihub.agnes-ai.com/v1/images/generations`，模型 `agnes-image-2.1-flash`
-- `imageUrl` 参数已声明但尚未在方法体中实现（图生图功能待完成）
-
-##### WeatherTools — 天气查询
-
-```java
-@Component
-public class WeatherTools {
-    private final WeatherService weatherService;
-
-    @Tool(description = "查询指定城市的实时天气")
-    public String getWeather(@ToolParam(description = "中文城市名") String city) {
-        return weatherService.getWeatherText(city);
-    }
-}
-```
-
-- 委托 `WeatherService` 获取数据
-- 返回格式化文本（如 "晴 26°C 南风 湿度60% 风力3级"）
-
-#### 4.3.5 关于 OpenAiImageModel
-
-`OpenAiImageModel` 是 Spring AI 框架提供的图片生成客户端，封装了 OpenAI 兼容的 `/v1/images/generations` API。它由 `spring-ai-starter-model-openai` 依赖自动创建 Bean，配置复用 `spring.ai.openai.*` 属性。
-
-与 `ChatClient` 的区别：
-
-| | `OpenAiImageModel` | `ChatClient` |
-|---|---|---|
-| **职责** | 图片生成（画图） | 文本对话（聊天） |
-| **API** | POST `/v1/images/generations` | POST `/v1/chat/completions` |
-| **角色** | "Model 客户端" | "Builder 包装器" |
-| **创建方式** | 自动配置 | 手动 @Bean |
-| **支持 Tool** | ❌ | ✅ `.tools()` |
+LLM 根据用户消息自行判断是否调用工具，开发者只需注册 `@Tool` 方法，无需编写意图识别代码。
 
 ---
 
-### 4.4 天气服务 (weather)
+### 4.4 对话记忆 (memory)
 
-#### 4.4.1 架构
+**MemoryConfig** — `MessageWindowChatMemory` 40 条消息滑动窗口，`InMemoryChatMemoryRepository` 存储（重启丢失）。
 
-```
-WeatherController (REST)
-    │ GET /weather/search?city=北京&type=base
-    ▼
-WeatherServiceImpl
-    ├── resolveCityCode() → 高德行政区划 API → adcode
-    ├── 高德天气 API (实时/预报)
-    └── parseLive() / parseForecast() → WeatherResponse
-```
-
-#### 4.4.2 高德 API 调用
-
-**实时天气**:
-```
-GET https://restapi.amap.com/v3/weather/weatherInfo
-    ?key={key}&city={adcode}&extensions=base
-```
-
-**预报天气**:
-```
-GET https://restapi.amap.com/v3/weather/weatherInfo
-    ?key={key}&city={adcode}&extensions=all
-```
-
-**城市编码查询**:
-```
-GET https://restapi.amap.com/v3/config/district
-    ?key={key}&keywords={city_name}&subdistrict=0
-```
-
-#### 4.4.3 DTO 定义
-
-所有 DTO 使用 Java `record` + Lombok `@Builder`：
-
-- **`WeatherRequest`**: `{ city: String }`
-- **`WeatherResponse`**: `{ type, province, city, weather, temperature, humidity, windDirection, windPower, reportTime, forecasts[] }`
-- **`ForecastDay`**: `{ date, week, dayWeather, nightWeather, dayTemp, nightTemp, dayWind, nightWind, dayPower, nightPower }`
-
-#### 4.4.4 WeatherController
-
-```java
-@RestController
-public class WeatherController {
-    @GetMapping("/weather/search")
-    public WeatherResponse searchWeather(
-            @RequestParam String city,
-            @RequestParam(defaultValue = "base") String type) {
-        return weatherService.getWeatherByCity(city, type);
-    }
-}
-```
-
-提供 REST API 接口，type=`base` 返回实时天气，type=`all` 返回预报。
+**MemoryManagerService** — 封装 `ChatMemory`，提供 `getHistory(userId)` / `save(userId, text, reply)` / `clear(userId)` 方法。在 `LlmServiceImpl` 中自动加载和保存。
 
 ---
 
-### 4.5 异常处理 (exception)
+### 4.5 语音服务
 
-#### ErrorCode 枚举
+| 服务 | 方向 | 流程 |
+|------|------|------|
+| **VoiceTools.speak()** | 输出 (TTS) | 文本 → ElevenLabs `eleven_turbo_v2_5` → MP3 → voiceQueue → WeixinBotService 发送文件 |
+| **VoiceService.speechToText()** | 输入 (STT) | 已弃用，iLink SDK 自带语音转文字 |
 
-统一错误码定义：
+---
 
-| 错误码 | 描述 |
-|--------|------|
-| `API_ERROR` | 高德 API 调用失败 |
-| `CITY_NOT_FOUND` | 未找到对应城市 |
-| `NETWORK_ERROR` | 网络请求失败 |
-| `ANALYSIS_ERROR` | 解析天气数据失败 |
-| `AI_CALL_FAILED` | AI 服务不可用 |
-| `AI_WEATHER_FAILED` | 天气查询失败 |
+### 4.6 Web 管理面板
 
-#### BusinessException
+`http://localhost:8080` 提供：
 
-携带 `ErrorCode` 的业务异常，可在构造时指定自定义消息。
+- **密钥配置** — 输入 DeepSeek / Agnes / ElevenLabs 密钥并保存到 RuntimeConfig
+- **扫码登录** — 生成 QR 码，微信扫码登录
+- **连接状态** — 实时显示是否在线
+- **断开连接** — 一键断开并清理 Session
 
-#### GlobalExceptionHandler
+#### REST API
 
-通过 `@RestControllerAdvice` 统一拦截 `BusinessException`，返回 HTTP 400 + JSON 错误体：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/config/keys` | 保存 API 密钥 |
+| GET | `/api/bot/login` | 触发登录，返回 QR URL |
+| POST | `/api/bot/disconnect` | 断开连接 |
+| GET | `/api/bot/status` | 查询连接状态 |
+| GET | `/weather/search` | 天气查询（city + type 参数） |
 
-```json
-{
-    "code": "CITY_NOT_FOUND",
-    "message": "未找到对应城市: xyz"
-}
-```
+---
+
+### 4.7 异常处理 (exception)
+
+| 类 | 职责 |
+|----|------|
+| `ErrorCode` | 枚举：API_ERROR, CITY_NOT_FOUND, NETWORK_ERROR, AI_CALL_FAILED 等 |
+| `BusinessException` | 携带 ErrorCode 的运行时异常 |
+| `GlobalExceptionHandler` | `@RestControllerAdvice` 拦截异常，返回 JSON 错误体 |
 
 ---
 
 ## 5. 核心调用链路
 
-### 5.1 文本聊天流程
+### 文本聊天
 
 ```
-用户发送微信文本消息 "你好"
-    │
-    ▼
-WeixinBotService.handleMessage()
-    ├── extractText → "你好"
-    ├── extractImageDataUri → null
-    └── 路由 → deepseekClient (DeepSeek 文本模型)
-            │
-            ▼
-    LlmServiceImpl.chat("你好", null, deepseekClient)
-        └── client.prompt()
-                .user("你好")
-                .tools(weatherTools, imageTools)
-                .call()
-                .content()
-            │
-            ▼
-    DeepSeek 返回文本回复
-    └── extractUrl → null
-        └── safeSendText("你好！有什么可以帮助你的吗？")
+微信 "你好"
+  → WeixinBotService.handleMessage()
+  → PerUserTaskDispatcher.submit(userId)
+  → MessageProcessor.process()
+    → UserContext.executeAs(userId)
+    → LlmServiceImpl.chat("你好", null, deepseekClient, userId)
+      → MemoryManagerService.getHistory(userId)  // 加载上下文
+      → ChatClient.prompt().messages(history).tools(...).call()
+      → DeepSeek 返回文本
+      → MemoryManagerService.save(userId, "你好", reply)  // 保存上下文
+    → ProcessResult.text(reply)
+  → WeixinBotService.sendResult() → safeSendText()
 ```
 
-### 5.2 图片生成流程
+### 天气查询
 
 ```
-用户发送微信消息 "帮我画一只猫"
-    │
-    ▼
-WeixinBotService.handleMessage()
-    ├── extractText → "帮我画一只猫"
-    └── 路由 → deepseekClient
-            │
-            ▼
-    LlmServiceImpl.chat("帮我画一只猫", null, deepseekClient)
-        └── client.prompt()
-                .user("帮我画一只猫")
-                .tools(weatherTools, imageTools)
-                .call()
-            │
-            ▼
-    Spring AI 工具回调
-    LLM 识别到画图意图 → 调用 generateImage("一只猫")
-            │
-            ▼
-    ImageTools.generateImage("一只猫", null)
-        ├── ImagePrompt → model: "agnes-image-2.1-flash", 1024x1024
-        ├── OpenAiImageModel.call() → POST Agnes AI 图片 API
-        └── 返回图片 URL
-            │
-            ▼
-    LLM 将 URL 嵌入回复文本
-            │
-            ▼
-    WeixinBotService.handleMessage() 处理回复
-        ├── extractUrl → 匹配到 https://...
-        ├── downloadImage → HTTP GET → byte[]
-        └── safeSendImage → 图片发送到微信
+微信 "北京天气"
+  → ... (同上路由)
+  → LlmServiceImpl.chat("北京天气", null, deepseekClient, userId)
+    → LLM 识别意图 → 调用 WeatherTools.getWeather("北京")
+      → WeatherServiceImpl.getWeatherText("北京")
+        → resolveCityCode("北京") → adcode "110000"
+        → GET 高德天气 API → 解析 JSON
+        → "晴 26°C 南风 湿度60%"
+    → LLM 将天气数据转为自然语言回复
+  → safeSendText()
 ```
 
-### 5.3 天气查询流程
+### 语音播报
 
 ```
-用户发送微信消息 "北京天气"
-    │
-    ▼
-WeixinBotService.handleMessage()
-    │
-    ▼
-LlmServiceImpl.chat("北京天气", null, deepseekClient)
-    └── client.prompt()
-            .user("北京天气")
-            .tools(weatherTools, imageTools)
-            .call()
-        │
-        ▼
-Spring AI 工具回调
-LLM 识别到天气查询 → 调用 getWeather("北京")
-        │
-        ▼
-WeatherTools.getWeather("北京")
-    └── WeatherServiceImpl.getWeatherText("北京")
-        ├── resolveCityCode("北京") → adcode
-        │   └── GET 高德行政区划 API → "110000"
-        ├── GET 高德天气 API → JSON
-        └── 格式化: "晴 26°C 南风 湿度60% 风力3级"
-            │
-            ▼
-LLM 将天气数据组织成自然语言回复
-    └── safeSendText("北京当前天气：晴 26°C...")
+微信 "朗读一段话"
+  → ... (同上路由)
+  → LlmServiceImpl.chat("朗读一段话", null, deepseekClient, userId)
+    → LLM → 调用 VoiceTools.speak("朗读内容")
+      → ElevenLabs TTS → MP3 字节
+      → voiceQueue.add(ProcessResult.voice(audio, userId))
+    → LLM 返回 "语音已播报"
+  → MessageProcessor 检查 voiceQueue.poll() → 有语音结果
+  → ProcessResult.voice → safeSendVoice()
 ```
 
 ---
 
 ## 6. 配置说明
 
-### application.properties
+### 密钥管理
 
-```properties
-# 应用
-spring.application.name=ykd
+使用 `application-local.yml` 存放真实密钥，不提交到 Git：
 
-# 高德天气
-gaode.key=xxxxxxxxxxxxxxxxxxxxxxxxx
-
-# Spring AI ChatClient 禁用自动配置（手动定义 Bean）
-spring.ai.chat.client.enabled=false
-
-# Agnes AI (OpenAI 兼容接口) — 用于多模态聊天 + 图片生成
-spring.ai.openai.api-key=sk-xxxx...
-spring.ai.openai.base-url=https://apihub.agnes-ai.com/v1
-spring.ai.openai.chat.options.model=agnes-2.0-flash
-
-# DeepSeek — 用于纯文本聊天
-spring.ai.deepseek.api-key=sk-xxxx...
-spring.ai.deepseek.base-url=https://api.deepseek.com
-spring.ai.deepseek.chat.options.model=deepseek-chat
+```bash
+cp config/application-local.yml.example config/application-local.yml
+# 编辑 config/application-local.yml，填入真实密钥
 ```
 
-### 关键配置说明
+`application.yml` 中只保留占位符 `changeme` 和公用的 base-url 配置。Spring Boot 通过 `spring.config.import` 自动加载 `config/application-local.yml` 覆盖默认值。
 
-| 配置项 | 说明 |
-|--------|------|
-| `spring.ai.chat.client.enabled=false` | 禁用 Spring AI 的 ChatClient 自动配置，由 `ChatClientConfig` 手动创建两个 ChatClient Bean |
-| `spring.ai.openai.*` | 虽然前缀是 `openai`，但 base-url 指向 Agnes AI，使用的是 OpenAI 兼容接口 |
-| `gaode.key` | 高德开放平台 API Key，用于天气查询 |
+### application.yml 结构
+
+```yaml
+spring:
+  config.import: optional:file:./config/application-local.yml
+  ai:
+    chat.client.enabled: false      # 关闭自动 ChatClient
+    openai:                          # Agnes AI
+      base-url: https://apihub.agnes-ai.com/v1
+      chat.options.model: agnes-2.0-flash
+    deepseek:                        # DeepSeek
+      base-url: https://api.deepseek.com
+      chat.options.model: deepseek-chat
+    elevenlabs:                      # ElevenLabs TTS
+      base-url: https://api.elevenlabs.io
+      tts.voice-id: EXAVITQu4vr4xnSDxMaL
+      tts.model: eleven_turbo_v2_5
+gaode:
+  key: changeme
+```
+
+### 关键配置项
+
+| 配置 | 说明 |
+|------|------|
+| `spring.ai.chat.client.enabled=false` | 禁用自动 ChatClient，手动创建 deepseekClient / agnesClient |
+| `spring.config.import` | 自动加载本地密钥文件 |
+| `spring.ai.openai.*` | OpenAI 兼容接口（Agnes AI），ChatClient + ImageModel 共用 |
 
 ---
 
-## 7. API 接口
+## 7. 数据流图
 
-### 7.1 天气查询 REST API
-
-**请求**:
 ```
-GET /weather/search?city=北京&type=base
+用户发送消息
+    │
+    ▼
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│ WeixinBot   │────▶│ MessageProcessor  │────▶│ LlmServiceImpl   │
+│ Service     │     │                  │     │                 │
+│ (iLink SDK) │     │ extractText()    │     │ getHistory()    │
+│             │     │ extractImage()   │     │ prompt().tools() │
+│ session     │     │ extractVoice()   │     │ save()          │
+│ persistence │     │ route()          │     │                 │
+└─────────────┘     └────────┬─────────┘     └────────┬────────┘
+                             │                        │
+                             │ UserContext            │ @Tool callbacks
+                             │ ThreadLocal            │
+                             ▼                        ▼
+                    ┌──────────────────┐    ┌────────────────────┐
+                    │ ProcessResult    │    │ WeatherTools       │
+                    │                  │    │ ImageTools         │
+                    │ TEXT / IMAGE     │    │ VoiceTools         │
+                    │ / VOICE / VIDEO  │    │ VideoTools         │
+                    └──────────────────┘    └────────────────────┘
 ```
-
-**参数**:
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `city` | String | 是 | — | 城市名或 adcode |
-| `type` | String | 否 | `base` | `base`=实时, `all`=预报 |
-
-**响应** (实时天气):
-```json
-{
-    "type": "base",
-    "province": "北京",
-    "city": "北京市",
-    "weather": "晴",
-    "temperature": "26",
-    "humidity": "60",
-    "windDirection": "南风",
-    "windPower": "3",
-    "reportTime": "2024-01-15 10:00:00",
-    "forecasts": null
-}
-```
-
-**响应** (预报天气):
-```json
-{
-    "type": "all",
-    "province": "北京",
-    "city": "北京市",
-    "reportTime": "2024-01-15 10:00:00",
-    "forecasts": [
-        {
-            "date": "2024-01-15",
-            "week": "1",
-            "dayWeather": "晴",
-            "nightWeather": "多云",
-            "dayTemp": "26",
-            "nightTemp": "15",
-            "dayWind": "南风",
-            "nightWind": "南风",
-            "dayPower": "3",
-            "nightPower": "2"
-        }
-    ]
-}
-```
-
-### 7.2 微信机器人接口
-
-无 HTTP 接口。通过 `ILinkClient` 轮询微信消息，自动响应。
 
 ---
 
-> **文档版本**: v1.0
-> **最后更新**: 2026-07-18
+> **文档版本**: v2.0  
+> **最后更新**: 2026-07-21
