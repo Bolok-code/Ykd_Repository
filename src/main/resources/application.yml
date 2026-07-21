@@ -5,11 +5,11 @@ spring:
     name: wechat-weather-bot
 app:
   amap:
-    api-key: ${AMAP_API_KEY}
+    api-key: ${AMAP_API_KEY:}
     base-url: https://restapi.amap.com/v3
   ai:
-    deepseek-key: ${DEEPSEEK_API_KEY}
-    bailian-key: ${BAILIAN_API_KEY}
+    deepseek-key: ${DEEPSEEK_API_KEY:}
+    bailian-key: ${BAILIAN_API_KEY:}
 logging:
   level:
     com.example.wechatbot: DEBUG
