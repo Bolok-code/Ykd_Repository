@@ -2,7 +2,8 @@ package ykd.ykd.llm.service;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -27,9 +28,9 @@ import java.util.Map;
  *   <li>查询状态：{@link #checkStatus(String)} → 返回当前状态及结果 URL</li>
  * </ol>
  */
-@Slf4j
 @Service
 public class VideoService {
+    private static final Logger log = LoggerFactory.getLogger(VideoService.class);
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;

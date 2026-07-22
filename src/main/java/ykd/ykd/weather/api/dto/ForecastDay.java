@@ -1,8 +1,6 @@
 package ykd.ykd.weather.api.dto;
 
-import lombok.Builder;
 
-@Builder
 public record ForecastDay(
         String date,
         String week,

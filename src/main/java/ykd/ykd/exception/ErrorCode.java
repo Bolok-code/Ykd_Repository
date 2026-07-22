@@ -1,8 +1,6 @@
 package ykd.ykd.exception;
 
-import lombok.Getter;
 
-@Getter
 public enum ErrorCode {
 
     // 天气
@@ -40,6 +38,9 @@ public enum ErrorCode {
 
     private final String code;
     private final String defaultMessage;
+
+    public String getCode() { return code; }
+    public String getDefaultMessage() { return defaultMessage; }
 
     ErrorCode(String code, String defaultMessage) {
         this.code = code;

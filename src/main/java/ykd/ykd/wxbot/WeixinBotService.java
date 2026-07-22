@@ -9,7 +9,8 @@ import com.github.wechat.ilink.sdk.core.login.LoginContext;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
@@ -29,9 +30,9 @@ import java.util.List;
  * <p>启动后通过二维码扫码登录微信，监听用户消息，将消息交由 {@link MessageProcessor} 处理，
  * 并将处理结果（文本/图片）发送给用户。支持 Session 持久化，重启后自动恢复登录。</p>
  */
-@Slf4j
 @Service
 public class WeixinBotService {
+    private static final Logger log = LoggerFactory.getLogger(WeixinBotService.class);
 
     private static final Path SESSION_FILE = Paths.get("work", "ilink-session.json");
     private static final long RETRY_DELAY_MS = 2_000L;
@@ -54,11 +55,11 @@ public class WeixinBotService {
      *
      * <p>优先尝试恢复保存的 Session，若无则生成 QR 码登录。
      */
-    @PostConstruct
+        @PostConstruct
     public void start() {
-        Thread botThread = new Thread(this::runBot, "wx-bot");
-        botThread.setDaemon(true);
-        botThread.start();
+        if (hasSavedSession()) {
+            new Thread(() -> login(), "wx-bot-restore").start();
+        }
     }
 
     /**
@@ -108,6 +109,7 @@ public class WeixinBotService {
                         if (client != null) {
                             saveSession(client.exportResumeContext());
                         }
+                        startPolling();
                     }
 
                     @Override
@@ -132,7 +134,8 @@ public class WeixinBotService {
                     })
                     .resumeContext(resumeContext)
                     .build();
-            log.info("已恢复保存的会话，无需扫码");
+            startPolling();
+            log.info("消息轮询线程已启动");
             return null;
         }
 
@@ -172,6 +175,7 @@ public class WeixinBotService {
                     sendCompletedVideo();
                     sendCompletedReminder();
                 } catch (SessionExpiredException e) {
+                    log.warn("轮询异常-会话过期: {}", e.getMessage());
                     log.warn("会话已过期，请重新登录");
                     deleteSession();
                     break;
@@ -206,6 +210,7 @@ public class WeixinBotService {
      * 消息处理入口：通过 PerUserTaskDispatcher 提交任务，保证每用户串行执行。
      */
     private void handleMessage(WeixinMessage msg) {
+        log.info("处理消息: from={}, msgId={}", msg.getFrom_user_id(), msg.getMessage_id());
         String userId = msg.getFrom_user_id();
         boolean accepted = dispatcher.submit(userId, () -> {
             ProcessResult result = messageProcessor.process(msg, client);
@@ -334,6 +339,41 @@ public class WeixinBotService {
             deleteSession();
             return null;
         }
+    }
+
+    private void startPolling() {
+        log.info("消息轮询线程已启动 - 开始监听消息");
+        Thread pollThread = new Thread(() -> {
+            while (running) {
+                try {
+                    List<WeixinMessage> messages = client.getUpdates();
+                    saveSession(client.exportResumeContext());
+                    if (messages != null) {
+                        for (WeixinMessage msg : messages) {
+                            handleMessage(msg);
+                        }
+                    }
+                    sendCompletedVideo();
+                } catch (SessionExpiredException e) {
+                    log.warn("轮询异常-会话过期: {}", e.getMessage());
+                    log.warn("会话已过期，请重新登录");
+                    deleteSession();
+                    break;
+                } catch (IOException e) {
+                    log.warn("轮询异常-IO: {}", e.getMessage());
+                    if (running) { sleep(RETRY_DELAY_MS); }
+                } catch (Exception e) {
+                    log.warn("轮询异常: {}", e.getMessage());
+                    if (running) { sleep(RETRY_DELAY_MS); }
+                }
+            }
+        }, "wx-poll");
+        pollThread.setDaemon(true);
+        pollThread.start();
+    }
+
+    private void sleep(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 
     private void closeClient() {
