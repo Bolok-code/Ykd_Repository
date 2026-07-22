@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
+import ykd.ykd.llm.tools.LocationTools;
 import ykd.ykd.llm.tools.VideoTools;
 import ykd.ykd.llm.tools.VoiceTools;
 import ykd.ykd.llm.tools.WeatherTools;
@@ -24,15 +25,18 @@ public class LlmServiceImpl implements LlmService {
     private final ImageTools imageTools;
     private final VideoTools videoTools;
     private final VoiceTools voiceTools;
+    private final LocationTools locationTools;
     private final MemoryManagerService memoryManagerService;
 
     public LlmServiceImpl(WeatherTools weatherTools, ImageTools imageTools,
                           VideoTools videoTools, VoiceTools voiceTools,
+                          LocationTools locationTools,
                           MemoryManagerService memoryManagerService) {
         this.weatherTools = weatherTools;
         this.imageTools = imageTools;
         this.videoTools = videoTools;
         this.voiceTools = voiceTools;
+        this.locationTools = locationTools;
         this.memoryManagerService = memoryManagerService;
     }
 
@@ -58,7 +62,13 @@ public class LlmServiceImpl implements LlmService {
                             userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
                         }
                     })
-                    .tools(weatherTools, imageTools, videoTools, voiceTools)
+                    .tools(
+                            weatherTools,
+                            imageTools,
+                            videoTools,
+                            voiceTools,
+                            locationTools
+                    )
                     .call()
                     .content();
 

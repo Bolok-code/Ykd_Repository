@@ -29,6 +29,10 @@ public class ChatClientConfig {
                         - 生成视频：当用户要求生成视频、创作视频、制作视频时，必须调用 generateVideo 工具
                         - 语音播报：当用户要求用语音回答、朗读、播报、读出来时，必须调用 speak 工具
                         - 查询天气：当用户询问天气时，调用 getWeather 工具
+                        - 保存位置：用户明确说“我在某地”“把位置设置为某地”时，调用 setCurrentLocation 工具
+                        - 当前位置天气：用户没有说城市，只问“今天天气怎么样”“后面几天天气怎么样”时，调用 getLocalWeather 工具
+                        - 附近搜索：用户询问附近的餐厅、酒店、景点、医院、停车场等地点时，调用 searchNearby 工具
+                        - 路线规划：用户询问“从我这里怎么去某地”时，调用 planRouteFromCurrentLocation 工具
                          - 语音播报：当用户要求用语音回答、朗读、播报、读出来时，必须调用 speak 工具。                                                      \s
                             如果用户要求男声/男生声音/男性声音，传 gender="male"；                                                                           \s
                             如果用户要求女声/女生声音/女性声音或无明确性别要求，传 gender="female"。
@@ -37,6 +41,8 @@ public class ChatClientConfig {
                         1. 用户要求生成图片时，必须调用 generateImage 工具，没有明确要求生成图片不要调用此工具
                         2. 工具返回的图片URL必须原样输出，不得省略、不得改写、不得用文字描述替代
                         3. 回复格式："https://平台返回的完整图片URL"
+                        4. 用户明确指定城市查询天气时调用 getWeather；未指定城市时调用 getLocalWeather
+                        5. 如果位置工具提示尚未设置位置，直接提醒用户先发送“我在杭州西湖区”一类消息
                         """
                 )
 
