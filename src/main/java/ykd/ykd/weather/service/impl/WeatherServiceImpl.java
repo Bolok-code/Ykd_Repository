@@ -1,9 +1,11 @@
 package ykd.ykd.weather.service.impl;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import ykd.ykd.exception.BusinessException;
@@ -25,8 +27,14 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class WeatherServiceImpl implements WeatherService {
+
+
     private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;// Jackson 自带，无需配置
+
+
+    private final ObjectMapper objectMapper;//
+
+
     @Value("${gaode.key}")
     private String apiKey;
 

@@ -1,5 +1,7 @@
 package ykd.ykd.wxbot;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
 import com.github.wechat.ilink.sdk.ILinkClient;
 import com.github.wechat.ilink.sdk.core.context.ResumeContext;
@@ -35,6 +37,7 @@ public class WeixinBotService {
 
     private static final Path SESSION_FILE = Paths.get("work", "ilink-session.json");
     private static final long RETRY_DELAY_MS = 2_000L;
+    private static final Logger log = LoggerFactory.getLogger(WeixinBotService.class);
 
     private final MessageProcessor messageProcessor;
     private final ObjectMapper objectMapper;

@@ -1,5 +1,7 @@
 package ykd.ykd.processor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -28,6 +30,7 @@ import java.util.function.Consumer;
 @Component
 public class VideoTaskManager {
 
+    private static final Logger log = LoggerFactory.getLogger(VideoTaskManager.class);
     private final VideoService videoService;
     private final Map<String, VideoTask> tasks = new ConcurrentHashMap<>();
     private volatile boolean running = true;

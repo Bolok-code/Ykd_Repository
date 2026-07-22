@@ -14,6 +14,10 @@ public class BusinessException extends RuntimeException {
      */
     private final ErrorCode errorCode;
 
+    public ErrorCode getErrorCode() {
+        return errorCode;
+    }
+
     /**
      * 使用错误码的默认文案构造异常。
      *

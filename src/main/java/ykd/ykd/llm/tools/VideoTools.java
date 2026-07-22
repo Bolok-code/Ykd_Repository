@@ -1,6 +1,8 @@
 package ykd.ykd.llm.tools;
 
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -13,6 +15,7 @@ import ykd.ykd.processor.VideoTaskManager;
 @Component
 public class VideoTools {
 
+    private static final Logger log = LoggerFactory.getLogger(VideoTools.class);
     private final VideoService videoService;
     private final VideoTaskManager videoTaskManager;
     private final UserContext userContext;

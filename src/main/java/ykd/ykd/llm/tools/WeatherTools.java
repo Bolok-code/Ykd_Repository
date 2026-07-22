@@ -2,6 +2,11 @@ package ykd.ykd.llm.tools;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.logging.log4j.LogManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -12,7 +17,12 @@ import ykd.ykd.weather.service.WeatherService;
 @Component
 @RequiredArgsConstructor
 public class WeatherTools {
+
+
+    private static final Logger log = LoggerFactory.getLogger(WeatherTools.class);
+
     private final WeatherService weatherService;
+
 
     @Tool(description = "查询指定城市的实时天气")
     public String getWeather(@ToolParam(description = "中文城市名，如 北京、上海") String city) {

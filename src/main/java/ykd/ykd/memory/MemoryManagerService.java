@@ -1,6 +1,8 @@
 package ykd.ykd.memory;
 
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -20,6 +22,7 @@ import java.util.List;
 @Component
 public class MemoryManagerService {
 
+    private static final Logger log = LoggerFactory.getLogger(MemoryManagerService.class);
     private final ChatMemory chatMemory;
 
     public MemoryManagerService(ChatMemory chatMemory) {
@@ -43,6 +46,7 @@ public class MemoryManagerService {
                 new AssistantMessage(assistantReply)
         ));
         log.debug("[MemoryManager] 保存对话: userId={}", userId);
+
     }
 
     /**

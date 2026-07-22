@@ -1,5 +1,7 @@
 package ykd.ykd.llm.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +33,7 @@ import java.util.Map;
 @Service
 public class VideoService {
 
+    private static final Logger log = LoggerFactory.getLogger(VideoService.class);
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final String apiKey;

@@ -6,6 +6,8 @@ import com.github.wechat.ilink.sdk.core.model.MessageItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 import ykd.ykd.exception.BusinessException;
@@ -48,6 +50,7 @@ public class MessageProcessor {
      * 用于从 AI 回复中提取图片 URL 的正则表达式。
      */
     private static final Pattern URL_PATTERN = Pattern.compile("https?://[^\\s]+");
+    private static final Logger log = LoggerFactory.getLogger(MessageProcessor.class);
 
     private final LlmService llmService;
     private final ChatClient deepseekClient;
