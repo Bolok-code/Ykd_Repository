@@ -252,7 +252,7 @@ public class WeixinBotService {
 
     private void safeSendVoice(String userId, byte[] voiceData) {
         try {
-            client.sendFile(userId, voiceData, "voice.mp3", "语音消息");
+            client.sendFile(userId, voiceData, "voice.mp3", null);
             log.info("[Bot] 语音文件发送成功: userId={}, size={}KB", userId, voiceData.length / 1024);
         } catch (Exception e) {
             log.error("[Bot] 发送语音失败: userId={}", userId, e);
