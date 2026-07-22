@@ -10,6 +10,7 @@ import org.springframework.util.MimeTypeUtils;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
+import ykd.ykd.llm.tools.LocationTools;
 import ykd.ykd.llm.tools.ReminderTools;
 import ykd.ykd.llm.tools.VideoTools;
 import ykd.ykd.llm.tools.VoiceTools;
@@ -29,6 +30,7 @@ public class LlmServiceImpl implements LlmService {
     private final VideoTools videoTools;
     private final VoiceTools voiceTools;
     private final ReminderTools reminderTools;
+    private final LocationTools locationTools;
     private final MemoryManagerService memoryManagerService;
 
 
@@ -54,7 +56,15 @@ public class LlmServiceImpl implements LlmService {
                             userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
                         }
                     })
-                    .tools(weatherTools, imageTools, videoTools, voiceTools, reminderTools,linkTools)
+                    .tools(
+                            linkTools,
+                            weatherTools,
+                            imageTools,
+                            videoTools,
+                            voiceTools,
+                            reminderTools,
+                            locationTools
+                    )
                     .call()
                     .content();
 
