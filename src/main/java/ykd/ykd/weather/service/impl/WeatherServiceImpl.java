@@ -35,6 +35,17 @@ public class WeatherServiceImpl implements WeatherService {
     private static final String DISTRICT_URL =
             "https://restapi.amap.com/v3/config/district?key={key}&keywords={keywords}&subdistrict=0";
 
+    /**
+     * 通过高德 API 查询指定城市的天气数据。
+     *
+     * <p>支持中文城市名和 adcode 两种输入格式，中文名会先调用行政区划 API 转换为 adcode。
+     * 根据 {@code type} 参数解析返回实时天气或未来预报。</p>
+     *
+     * @param city 中文城市名（如 北京、上海）或数字 adcode
+     * @param type 查询类型，{@code "base"} 查询实时天气，{@code "all"} 查询未来几天预报
+     * @return 天气响应对象，type=base 时包含 lives 数据，type=all 时包含 forecasts 列表
+     * @throws BusinessException 城市名为空、城市未找到、API 调用失败或网络异常时抛出
+     */
     @Override
     public WeatherResponse getWeatherByCity(String city, String type) {
         if (city == null || city.isBlank()) {
@@ -63,9 +74,32 @@ public class WeatherServiceImpl implements WeatherService {
 
     }
 
+    /**
+     * 将天气查询结果格式化为可读文本。
+     *
+     * <p>根据 {@code type} 参数区分实时天气和预报的文本拼接逻辑。</p>
+     *
+     * @param city 城市名称或 adcode
+     * @param type 查询类型，{@code "base"} 返回实时天气，{@code "all"} 返回未来几天预报
+     * @return 格式化后的天气文本，无预报数据时返回 {@code "暂无预报数据"}
+     */
     @Override
-    public String getWeatherText(String city) {
-        WeatherResponse w = getWeatherByCity(city, "base");
+    public String getWeatherText(String city, String type) {
+        WeatherResponse w = getWeatherByCity(city, type);
+        if ("all".equals(type)) {
+            if (w.forecasts() == null || w.forecasts().isEmpty()) {
+                return "暂无预报数据";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append(w.city()).append("未来天气：\n");
+            for (ForecastDay day : w.forecasts()) {
+                sb.append(String.format("%s(%s) 白天%s %s°C 夜间%s %s°C\n",
+                        day.date(), day.week(),
+                        day.dayWeather(), day.dayTemp(),
+                        day.nightWeather(), day.nightTemp()));
+            }
+            return sb.toString().trim();
+        }
         return String.format("%s %s°C %s 湿度%s%% 风力%s级",
                 w.weather(), w.temperature(), w.windDirection(), w.humidity(), w.windPower());
     }
