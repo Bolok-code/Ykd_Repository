@@ -170,6 +170,7 @@ public class WeixinBotService {
                         }
                     }
                     sendCompletedVideo();
+                    sendCompletedReminder();
                 } catch (SessionExpiredException e) {
                     log.warn("会话已过期，请重新登录");
                     deleteSession();
@@ -266,6 +267,15 @@ public class WeixinBotService {
     /**
      * 检查并发送后台完成的视频。
      */
+    private void sendCompletedReminder() {
+        ProcessResult result = messageProcessor.pollCompletedReminder();
+        while (result != null) {
+            log.info("[Bot] 推送提醒: userId={}, text={}", result.userId(), result.text());
+            safeSendText(result.userId(), result.text());
+            result = messageProcessor.pollCompletedReminder();
+        }
+    }
+
     private void sendCompletedVideo() {
         ProcessResult result = messageProcessor.pollCompletedVideo();
         while (result != null) {
