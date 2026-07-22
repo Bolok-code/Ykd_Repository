@@ -173,6 +173,7 @@ public class WeixinBotService {
                         }
                     }
                     sendCompletedVideo();
+                    sendCompletedReminder();
                 } catch (SessionExpiredException e) {
                     log.warn("轮询异常-会话过期: {}", e.getMessage());
                     log.warn("会话已过期，请重新登录");
@@ -271,6 +272,15 @@ public class WeixinBotService {
     /**
      * 检查并发送后台完成的视频。
      */
+    private void sendCompletedReminder() {
+        ProcessResult result = messageProcessor.pollCompletedReminder();
+        while (result != null) {
+            log.info("[Bot] 推送提醒: userId={}, text={}", result.userId(), result.text());
+            safeSendText(result.userId(), result.text());
+            result = messageProcessor.pollCompletedReminder();
+        }
+    }
+
     private void sendCompletedVideo() {
         ProcessResult result = messageProcessor.pollCompletedVideo();
         while (result != null) {
@@ -298,6 +308,13 @@ public class WeixinBotService {
         }
     }
 
+    /**
+     * 从本地文件加载持久化的 iLink 会话。
+     *
+     * <p>文件不存在或内容无效时返回 {@code null}，由调用方回退到扫码登录。</p>
+     *
+     * @return 可恢复的 {@link ResumeContext}，无法恢复时返回 {@code null}
+     */
     private ResumeContext loadSession() {
         if (!Files.exists(SESSION_FILE)) {
             return null;

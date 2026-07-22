@@ -4,6 +4,6 @@ public interface WeatherService {
     WeatherResponse getWeatherByCity(String city, String type);
 
     // WeatherService.java
-    String getWeatherText(String city);
+    String getWeatherText(String city,String type);
 
 }

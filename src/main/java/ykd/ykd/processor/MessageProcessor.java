@@ -54,20 +54,24 @@ public class MessageProcessor {
     private final ChatClient deepseekClient;
     private final ChatClient agnesClient;
     private final VideoTaskManager videoTaskManager;
+    private final ReminderTaskManager reminderTaskManager;
     private final UserContext userContext;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
+    private final Queue<ProcessResult> completedReminders = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> voiceQueue;
 
     public MessageProcessor(LlmService llmService,
                             ChatClient deepseekClient,
                             ChatClient agnesClient,
                             VideoTaskManager videoTaskManager,
+                            ReminderTaskManager reminderTaskManager,
                             UserContext userContext,
                             Queue<ProcessResult> voiceQueue) {
         this.llmService = llmService;
         this.deepseekClient = deepseekClient;
         this.agnesClient = agnesClient;
         this.videoTaskManager = videoTaskManager;
+        this.reminderTaskManager = reminderTaskManager;
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
     }
@@ -78,6 +82,7 @@ public class MessageProcessor {
     @PostConstruct
     public void init() {
         videoTaskManager.setOnCompleted(completedVideos::add);
+        reminderTaskManager.setOnCompleted(completedReminders::add);
     }
 
     /**
@@ -89,6 +94,13 @@ public class MessageProcessor {
      */
     public ProcessResult pollCompletedVideo() {
         return completedVideos.poll();
+    }
+
+    /**
+     * 拉取已到期的提醒结果（非阻塞）。
+     */
+    public ProcessResult pollCompletedReminder() {
+        return completedReminders.poll();
     }
 
     /**

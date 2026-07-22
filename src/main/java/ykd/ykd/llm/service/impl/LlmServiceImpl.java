@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
+import ykd.ykd.llm.tools.ReminderTools;
 import ykd.ykd.llm.tools.VideoTools;
 import ykd.ykd.llm.tools.VoiceTools;
 import ykd.ykd.llm.tools.LinkTools;
@@ -27,16 +28,19 @@ public class LlmServiceImpl implements LlmService {
     private final ImageTools imageTools;
     private final VideoTools videoTools;
     private final VoiceTools voiceTools;
+    private final ReminderTools reminderTools;
     private final MemoryManagerService memoryManagerService;
 
     public LlmServiceImpl(LinkTools linkTools, WeatherTools weatherTools, ImageTools imageTools,
                           VideoTools videoTools, VoiceTools voiceTools,
+                          ReminderTools reminderTools,
                           MemoryManagerService memoryManagerService) {
         this.linkTools = linkTools;
         this.weatherTools = weatherTools;
         this.imageTools = imageTools;
         this.videoTools = videoTools;
         this.voiceTools = voiceTools;
+        this.reminderTools = reminderTools;
         this.memoryManagerService = memoryManagerService;
     }
 
@@ -62,7 +66,7 @@ public class LlmServiceImpl implements LlmService {
                             userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
                         }
                     })
-                    .tools(linkTools, weatherTools, imageTools, videoTools, voiceTools)
+                    .tools(weatherTools, imageTools, videoTools, voiceTools, reminderTools)
                     .call()
                     .content();
 
