@@ -1,7 +1,6 @@
 package ykd.ykd.llm.tools;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -10,9 +9,9 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
 
+@Slf4j
 @Component
 public class LinkTools {
-    private static final Logger log = LoggerFactory.getLogger(LinkTools.class);
 
     @Tool(description = "读取链接内容并返回文本摘要。当用户发送链接、文章、网页时调用此工具")
     public String readLink(

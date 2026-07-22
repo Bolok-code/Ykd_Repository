@@ -1,7 +1,6 @@
 package ykd.ykd.memory;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -17,9 +16,9 @@ import java.util.List;
  * <p>当前用 {@code InMemoryChatMemoryRepository} 存储，重启丢失。
  * 换 JDBC 实现时无需修改此类。</p>
  */
+@Slf4j
 @Component
 public class MemoryManagerService {
-    private static final Logger log = LoggerFactory.getLogger(MemoryManagerService.class);
 
     private final ChatMemory chatMemory;
 

@@ -1,12 +1,12 @@
 package ykd.ykd.llm.service.impl;
 
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
@@ -18,10 +18,10 @@ import ykd.ykd.llm.tools.WeatherTools;
 
 import java.net.URI;
 import java.util.List;
-
+@Slf4j
+@RequiredArgsConstructor
 @Service
 public class LlmServiceImpl implements LlmService {
-    private static final Logger log = LoggerFactory.getLogger(LlmServiceImpl.class);
 
     private final LinkTools linkTools;
     private final WeatherTools weatherTools;
@@ -31,18 +31,6 @@ public class LlmServiceImpl implements LlmService {
     private final ReminderTools reminderTools;
     private final MemoryManagerService memoryManagerService;
 
-    public LlmServiceImpl(LinkTools linkTools, WeatherTools weatherTools, ImageTools imageTools,
-                          VideoTools videoTools, VoiceTools voiceTools,
-                          ReminderTools reminderTools,
-                          MemoryManagerService memoryManagerService) {
-        this.linkTools = linkTools;
-        this.weatherTools = weatherTools;
-        this.imageTools = imageTools;
-        this.videoTools = videoTools;
-        this.voiceTools = voiceTools;
-        this.reminderTools = reminderTools;
-        this.memoryManagerService = memoryManagerService;
-    }
 
     @Override
     public String chat(String text, String imageUrl, ChatClient client, String userId) {
@@ -66,7 +54,7 @@ public class LlmServiceImpl implements LlmService {
                             userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
                         }
                     })
-                    .tools(weatherTools, imageTools, videoTools, voiceTools, reminderTools)
+                    .tools(weatherTools, imageTools, videoTools, voiceTools, reminderTools,linkTools)
                     .call()
                     .content();
 

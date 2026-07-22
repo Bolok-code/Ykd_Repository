@@ -5,7 +5,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 import ykd.ykd.exception.ErrorCode;
-import ykd.ykd.processor.ReminderTaskManager;
+import ykd.ykd.task.ReminderTaskManager;
 import ykd.ykd.processor.UserContext;
 
 @Slf4j

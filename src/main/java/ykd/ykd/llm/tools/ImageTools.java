@@ -1,7 +1,6 @@
 package ykd.ykd.llm.tools;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.image.ImagePrompt;
 import org.springframework.ai.openai.OpenAiImageModel;
 import org.springframework.ai.openai.OpenAiImageOptions;
@@ -10,9 +9,9 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 import ykd.ykd.exception.ErrorCode;
 
+@Slf4j
 @Component
 public class ImageTools {
-    private static final Logger log = LoggerFactory.getLogger(ImageTools.class);
 
     private final OpenAiImageModel agnesImageModel;
 

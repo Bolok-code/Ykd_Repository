@@ -13,14 +13,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 按用户串行、跨用户并行地执行任务。
  */
+@Slf4j
 public class PerUserTaskDispatcher implements AutoCloseable {
-    private static final Logger LOG = LoggerFactory.getLogger(PerUserTaskDispatcher.class);
 
     private final ThreadPoolExecutor executor;
     private final ConcurrentMap<String, UserQueue> userQueues = new ConcurrentHashMap<>();
@@ -101,7 +100,7 @@ public class PerUserTaskDispatcher implements AutoCloseable {
                 try {
                     task.run();
                 } catch (Throwable t) {
-                    LOG.warn("任务执行失败: userId={}", userId, t);
+                    log.warn("任务执行失败: userId={}", userId, t);
                 }
                 continue;
             }
