@@ -1,5 +1,6 @@
 package ykd.ykd.weather.service.impl;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -22,14 +23,10 @@ import java.util.Map;
 
 
 @Service
+@RequiredArgsConstructor
 public class WeatherServiceImpl implements WeatherService {
     private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;
-
-    public WeatherServiceImpl(RestTemplate restTemplate, ObjectMapper objectMapper) {
-        this.restTemplate = restTemplate;
-        this.objectMapper = objectMapper;
-    }// Jackson 自带，无需配置
+    private final ObjectMapper objectMapper;// Jackson 自带，无需配置
     @Value("${gaode.key}")
     private String apiKey;
 
@@ -109,11 +106,17 @@ public class WeatherServiceImpl implements WeatherService {
 
     private WeatherResponse parseLive(JsonNode root) {
         JsonNode live = root.path("lives").get(0);
-        return new WeatherResponse(
-                "base", live.path("province").asText(), live.path("city").asText(),
-                live.path("weather").asText(), live.path("temperature").asText(), live.path("humidity").asText(),
-                live.path("winddirection").asText(), live.path("windpower").asText(), live.path("reporttime").asText(),
-                null);
+        return WeatherResponse.builder()
+                .type("base")
+                .province(live.path("province").asText())
+                .city(live.path("city").asText())
+                .weather(live.path("weather").asText())
+                .temperature(live.path("temperature").asText())
+                .humidity(live.path("humidity").asText())
+                .windDirection(live.path("winddirection").asText())
+                .windPower(live.path("windpower").asText())
+                .reportTime(live.path("reporttime").asText())
+                .build();
     }
 
     private WeatherResponse parseForecast(JsonNode root) {
@@ -121,16 +124,26 @@ public class WeatherServiceImpl implements WeatherService {
 
         List<ForecastDay> list = new ArrayList<>();
         for (JsonNode cast : forecast.path("casts")) {
-            list.add(new ForecastDay(
-                    cast.path("date").asText(), cast.path("week").asText(),
-                    cast.path("dayweather").asText(), cast.path("nightweather").asText(),
-                    cast.path("daytemp").asText(), cast.path("nighttemp").asText(),
-                    cast.path("daywind").asText(), cast.path("nightwind").asText(),
-                    cast.path("daypower").asText(), cast.path("nightpower").asText()));
+            list.add(ForecastDay.builder()
+                    .date(cast.path("date").asText())
+                    .week(cast.path("week").asText())
+                    .dayWeather(cast.path("dayweather").asText())
+                    .nightWeather(cast.path("nightweather").asText())
+                    .dayTemp(cast.path("daytemp").asText())
+                    .nightTemp(cast.path("nighttemp").asText())
+                    .dayWind(cast.path("daywind").asText())
+                    .nightWind(cast.path("nightwind").asText())
+                    .dayPower(cast.path("daypower").asText())
+                    .nightPower(cast.path("nightpower").asText())
+                    .build());
         }
-        return new WeatherResponse(
-                "all", forecast.path("province").asText(), forecast.path("city").asText(),
-                null, null, null, null, null, forecast.path("reporttime").asText(), list);
+        return WeatherResponse.builder()
+                .type("all")
+                .province(forecast.path("province").asText())
+                .city(forecast.path("city").asText())
+                .reportTime(forecast.path("reporttime").asText())
+                .forecasts(list)
+                .build();
     }
 
 

@@ -1,7 +1,6 @@
 package ykd.ykd.llm.tools;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.audio.tts.TextToSpeechModel;
 import org.springframework.ai.audio.tts.TextToSpeechPrompt;
 import org.springframework.ai.elevenlabs.ElevenLabsTextToSpeechOptions;
@@ -21,9 +20,9 @@ import java.util.Queue;
  * 语音合成工具，通过 Spring AI {@link TextToSpeechModel} 调用 ElevenLabs TTS，
  * 以文件形式发送音频。
  */
+@Slf4j
 @Component
 public class VoiceTools {
-    private static final Logger log = LoggerFactory.getLogger(VoiceTools.class);
 
     private final TextToSpeechModel speechModel;
     private final UserContext userContext;

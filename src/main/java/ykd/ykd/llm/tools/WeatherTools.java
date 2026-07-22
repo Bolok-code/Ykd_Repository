@@ -1,21 +1,18 @@
 package ykd.ykd.llm.tools;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.weather.service.WeatherService;
 
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class WeatherTools {
-    private static final Logger log = LoggerFactory.getLogger(WeatherTools.class);
-        private final WeatherService weatherService;
-
-    public WeatherTools(WeatherService weatherService) {
-        this.weatherService = weatherService;
-    }
+    private final WeatherService weatherService;
 
     @Tool(description = "查询指定城市的实时天气")
     public String getWeather(

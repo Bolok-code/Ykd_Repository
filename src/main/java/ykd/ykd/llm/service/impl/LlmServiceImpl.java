@@ -5,8 +5,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
@@ -14,17 +13,15 @@ import ykd.ykd.llm.tools.LocationTools;
 import ykd.ykd.llm.tools.ReminderTools;
 import ykd.ykd.llm.tools.VideoTools;
 import ykd.ykd.llm.tools.VoiceTools;
-import ykd.ykd.llm.tools.LinkTools;
 import ykd.ykd.llm.tools.WeatherTools;
 
 import java.net.URI;
 import java.util.List;
 
+@Slf4j
 @Service
 public class LlmServiceImpl implements LlmService {
-    private static final Logger log = LoggerFactory.getLogger(LlmServiceImpl.class);
 
-    private final LinkTools linkTools;
     private final WeatherTools weatherTools;
     private final ImageTools imageTools;
     private final VideoTools videoTools;
@@ -33,12 +30,11 @@ public class LlmServiceImpl implements LlmService {
     private final LocationTools locationTools;
     private final MemoryManagerService memoryManagerService;
 
-    public LlmServiceImpl(LinkTools linkTools, WeatherTools weatherTools, ImageTools imageTools,
+    public LlmServiceImpl(WeatherTools weatherTools, ImageTools imageTools,
                           VideoTools videoTools, VoiceTools voiceTools,
                           ReminderTools reminderTools,
                           LocationTools locationTools,
                           MemoryManagerService memoryManagerService) {
-        this.linkTools = linkTools;
         this.weatherTools = weatherTools;
         this.imageTools = imageTools;
         this.videoTools = videoTools;

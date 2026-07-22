@@ -3,8 +3,7 @@ package ykd.ykd.processor;
 import tools.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import ykd.ykd.llm.service.VideoService;
 
@@ -25,9 +24,9 @@ import java.util.function.Consumer;
  * <p>不直接持有 ILinkClient，完成后通过 {@link Consumer} 回传
  * {@link ProcessResult#video(byte[])}，由 {@code WeixinBotService} 统一发送。</p>
  */
+@Slf4j
 @Component
 public class VideoTaskManager {
-    private static final Logger log = LoggerFactory.getLogger(VideoTaskManager.class);
 
     private final VideoService videoService;
     private final Map<String, VideoTask> tasks = new ConcurrentHashMap<>();
