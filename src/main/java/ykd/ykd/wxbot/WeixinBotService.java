@@ -293,6 +293,13 @@ public class WeixinBotService {
         }
     }
 
+    /**
+     * 从本地文件加载持久化的 iLink 会话。
+     *
+     * <p>文件不存在或内容无效时返回 {@code null}，由调用方回退到扫码登录。</p>
+     *
+     * @return 可恢复的 {@link ResumeContext}，无法恢复时返回 {@code null}
+     */
     private ResumeContext loadSession() {
         if (!Files.exists(SESSION_FILE)) {
             return null;
