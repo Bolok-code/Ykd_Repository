@@ -1,4 +1,4 @@
-package ykd.ykd.processor;
+package ykd.ykd.task;
 
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import ykd.ykd.llm.service.LlmService;
+import ykd.ykd.processor.ProcessResult;
+import ykd.ykd.processor.UserContext;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -172,11 +174,6 @@ public class ReminderTaskManager {
 
     // ==================== 时间解析 ====================
 
-    /**
-     * 解析延迟时间表达，如 "10分钟后" → 600 秒。
-     *
-     * @return 秒数，无法解析返回 -1，时间为 0 返回 0
-     */
     private long parseDelay(String expr) {
         Pattern p = Pattern.compile("(\\d+)\\s*(分钟|小时|秒)(后)?");
         Matcher m = p.matcher(expr);
@@ -190,9 +187,6 @@ public class ReminderTaskManager {
         };
     }
 
-    /**
-     * 解析每日时间，如 "每天早上8点" → 08:00。
-     */
     private LocalTime parseDailyTime(String expr) {
         Pattern p = Pattern.compile("(\\d{1,2})[:：点](\\d{0,2})");
         Matcher m = p.matcher(expr);
@@ -204,9 +198,6 @@ public class ReminderTaskManager {
         return LocalTime.of(hour, minute);
     }
 
-    /**
-     * 计算从现在到目标时间的下一次出现的秒数。
-     */
     private long calculateInitialDelay(LocalTime target) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime next = now.toLocalDate().atTime(target);
@@ -224,12 +215,6 @@ public class ReminderTaskManager {
         return mins > 0 ? hours + "小时" + mins + "分钟" : hours + "小时";
     }
 
-    /**
-     * 触发提醒，将消息重新送入 LLM 处理，支持查天气、生成图片等动态能力。
-     *
-     * <p>在 scheduler 线程执行，通过 {@link UserContext#executeAs} 传递 userId。
-     * LLM 调用失败时降级发送静态原文，确保提醒不会静默丢失。</p>
-     */
     private void fire(String userId, String message) {
         if (onCompleted == null) {
             log.warn("[Reminder] 回调未设置，提醒丢失: userId={}, msg={}", userId, message);

@@ -1,7 +1,6 @@
 package ykd.ykd.llm.tools;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.audio.tts.TextToSpeechModel;
 import org.springframework.ai.audio.tts.TextToSpeechPrompt;
 import org.springframework.ai.elevenlabs.ElevenLabsTextToSpeechOptions;
@@ -21,29 +20,29 @@ import java.util.Queue;
  * 语音合成工具，通过 Spring AI {@link TextToSpeechModel} 调用 ElevenLabs TTS，
  * 以文件形式发送音频。
  */
+@Slf4j
 @Component
 public class VoiceTools {
-    private static final Logger log = LoggerFactory.getLogger(VoiceTools.class);
 
     private final TextToSpeechModel speechModel;
     private final UserContext userContext;
     private final Queue<ProcessResult> voiceQueue;
     private final String voiceId;
-    private final String malevoiceId;
+    private final String maleVoiceId;
     private final String model;
 
     public VoiceTools(@Qualifier("elevenLabsSpeechModel") TextToSpeechModel speechModel,
                       UserContext userContext,
                       Queue<ProcessResult> voiceQueue,
                       @Value("${spring.ai.elevenlabs.tts.voice-id}") String voiceId,
-                      @Value("${spring.ai.elevenlabs.tts.male-voice-id}") String malevoiceId,
+                      @Value("${spring.ai.elevenlabs.tts.male-voice-id}") String maleVoiceId,
                       @Value("${spring.ai.elevenlabs.tts.model:eleven_turbo_v2_5}") String model) {
         this.speechModel = speechModel;
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
         this.voiceId = voiceId;
         this.model = model;
-        this.malevoiceId = malevoiceId;
+        this.maleVoiceId = maleVoiceId;
 
 
     }
@@ -100,7 +99,7 @@ public class VoiceTools {
      */
     private String resolveVoiceId(String gender) {
         if ("male".equalsIgnoreCase(gender)) {
-            return malevoiceId;
+            return maleVoiceId;
         }
         return voiceId;
     }

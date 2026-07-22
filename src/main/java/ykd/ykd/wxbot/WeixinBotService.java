@@ -9,8 +9,7 @@ import com.github.wechat.ilink.sdk.core.login.LoginContext;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
@@ -30,9 +29,9 @@ import java.util.List;
  * <p>启动后通过二维码扫码登录微信，监听用户消息，将消息交由 {@link MessageProcessor} 处理，
  * 并将处理结果（文本/图片）发送给用户。支持 Session 持久化，重启后自动恢复登录。</p>
  */
+@Slf4j
 @Service
 public class WeixinBotService {
-    private static final Logger log = LoggerFactory.getLogger(WeixinBotService.class);
 
     private static final Path SESSION_FILE = Paths.get("work", "ilink-session.json");
     private static final long RETRY_DELAY_MS = 2_000L;
