@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
+import ykd.ykd.llm.tools.LocationTools;
 import ykd.ykd.llm.tools.ReminderTools;
 import ykd.ykd.llm.tools.VideoTools;
 import ykd.ykd.llm.tools.VoiceTools;
@@ -29,11 +30,13 @@ public class LlmServiceImpl implements LlmService {
     private final VideoTools videoTools;
     private final VoiceTools voiceTools;
     private final ReminderTools reminderTools;
+    private final LocationTools locationTools;
     private final MemoryManagerService memoryManagerService;
 
     public LlmServiceImpl(LinkTools linkTools, WeatherTools weatherTools, ImageTools imageTools,
                           VideoTools videoTools, VoiceTools voiceTools,
                           ReminderTools reminderTools,
+                          LocationTools locationTools,
                           MemoryManagerService memoryManagerService) {
         this.linkTools = linkTools;
         this.weatherTools = weatherTools;
@@ -41,6 +44,7 @@ public class LlmServiceImpl implements LlmService {
         this.videoTools = videoTools;
         this.voiceTools = voiceTools;
         this.reminderTools = reminderTools;
+        this.locationTools = locationTools;
         this.memoryManagerService = memoryManagerService;
     }
 
@@ -66,7 +70,15 @@ public class LlmServiceImpl implements LlmService {
                             userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
                         }
                     })
-                    .tools(weatherTools, imageTools, videoTools, voiceTools, reminderTools)
+                    .tools(
+                            linkTools,
+                            weatherTools,
+                            imageTools,
+                            videoTools,
+                            voiceTools,
+                            reminderTools,
+                            locationTools
+                    )
                     .call()
                     .content();
 
