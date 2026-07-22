@@ -7,15 +7,9 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
+import ykd.ykd.llm.tools.*;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
-import ykd.ykd.llm.tools.ImageTools;
-import ykd.ykd.llm.tools.LocationTools;
-import ykd.ykd.llm.tools.ReminderTools;
-import ykd.ykd.llm.tools.VideoTools;
-import ykd.ykd.llm.tools.VoiceTools;
-import ykd.ykd.llm.tools.LinkTools;
-import ykd.ykd.llm.tools.WeatherTools;
 
 import java.net.URI;
 import java.util.List;
@@ -32,6 +26,8 @@ public class LlmServiceImpl implements LlmService {
     private final ReminderTools reminderTools;
     private final LocationTools locationTools;
     private final MemoryManagerService memoryManagerService;
+    private final CalculatorTools calculatorTools;
+    private final TranslateTools translateTools;
 
 
     @Override
@@ -63,7 +59,10 @@ public class LlmServiceImpl implements LlmService {
                             videoTools,
                             voiceTools,
                             reminderTools,
-                            locationTools
+                            locationTools,
+                            calculatorTools,
+                            translateTools
+
                     )
                     .call()
                     .content();
