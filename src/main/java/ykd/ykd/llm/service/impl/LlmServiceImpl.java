@@ -5,30 +5,34 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.ImageTools;
 import ykd.ykd.llm.tools.VideoTools;
 import ykd.ykd.llm.tools.VoiceTools;
+import ykd.ykd.llm.tools.LinkTools;
 import ykd.ykd.llm.tools.WeatherTools;
 
 import java.net.URI;
 import java.util.List;
 
-@Slf4j
 @Service
 public class LlmServiceImpl implements LlmService {
+    private static final Logger log = LoggerFactory.getLogger(LlmServiceImpl.class);
 
+    private final LinkTools linkTools;
     private final WeatherTools weatherTools;
     private final ImageTools imageTools;
     private final VideoTools videoTools;
     private final VoiceTools voiceTools;
     private final MemoryManagerService memoryManagerService;
 
-    public LlmServiceImpl(WeatherTools weatherTools, ImageTools imageTools,
+    public LlmServiceImpl(LinkTools linkTools, WeatherTools weatherTools, ImageTools imageTools,
                           VideoTools videoTools, VoiceTools voiceTools,
                           MemoryManagerService memoryManagerService) {
+        this.linkTools = linkTools;
         this.weatherTools = weatherTools;
         this.imageTools = imageTools;
         this.videoTools = videoTools;
@@ -58,7 +62,7 @@ public class LlmServiceImpl implements LlmService {
                             userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
                         }
                     })
-                    .tools(weatherTools, imageTools, videoTools, voiceTools)
+                    .tools(linkTools, weatherTools, imageTools, videoTools, voiceTools)
                     .call()
                     .content();
 

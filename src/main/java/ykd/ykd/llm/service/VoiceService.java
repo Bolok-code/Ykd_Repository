@@ -2,7 +2,8 @@ package ykd.ykd.llm.service;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
@@ -22,9 +23,9 @@ import java.nio.file.Paths;
 /**
  * 语音服务：STT（微信 SILK → ElevenLabs 识别）。//已放弃使用 ilinksdk 语音转文字自动支持
  */
-@Slf4j
 @Service
 public class VoiceService {
+    private static final Logger log = LoggerFactory.getLogger(VoiceService.class);
 
     private static final Path DECODER = Paths.get("src/main/resources/native/decoder");
 
