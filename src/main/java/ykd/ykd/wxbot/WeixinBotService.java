@@ -173,6 +173,7 @@ public class WeixinBotService {
                     }
                     sendCompletedVideo();
                     sendCompletedReminder();
+                    sendCompletedImageBatch();
                 } catch (SessionExpiredException e) {
                     log.warn("轮询异常-会话过期: {}", e.getMessage());
                     log.warn("会话已过期，请重新登录");
@@ -280,6 +281,15 @@ public class WeixinBotService {
         }
     }
 
+    private void sendCompletedImageBatch() {
+        ProcessResult result = messageProcessor.pollCompletedImageBatch();
+        while (result != null) {
+            log.info("[Bot] 推送图片批次结果: userId={}", result.userId());
+            safeSendText(result.userId(), result.text());
+            result = messageProcessor.pollCompletedImageBatch();
+        }
+    }
+
     private void sendCompletedVideo() {
         ProcessResult result = messageProcessor.pollCompletedVideo();
         while (result != null) {
@@ -353,6 +363,8 @@ public class WeixinBotService {
                         }
                     }
                     sendCompletedVideo();
+                    sendCompletedReminder();
+                    sendCompletedImageBatch();
                 } catch (SessionExpiredException e) {
                     log.warn("轮询异常-会话过期: {}", e.getMessage());
                     log.warn("会话已过期，请重新登录");
