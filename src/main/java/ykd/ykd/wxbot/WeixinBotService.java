@@ -1,4 +1,4 @@
-﻿package ykd.ykd.wxbot;
+package ykd.ykd.wxbot;
 
 import tools.jackson.databind.ObjectMapper;
 import com.github.wechat.ilink.sdk.ILinkClient;
