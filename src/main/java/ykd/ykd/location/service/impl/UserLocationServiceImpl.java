@@ -18,7 +18,7 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
-public class UserLocationServiceImpl implements UserLocationService {
+ public class UserLocationServiceImpl implements UserLocationService {
 
     private final UserLocationRepository userLocationRepository;
     private final AmapLocationService amapLocationService;
