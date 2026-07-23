@@ -160,64 +160,6 @@ public class WeixinBotService {
         }
     }
 
-    private void runBot() {
-        try {
-            String qrUrl = login();
-            if (qrUrl != null) {
-                log.info("========================================");
-                log.info("请将以下URL转为二维码后，用微信扫码登录：");
-                log.info("{}", qrUrl);
-                log.info("========================================");
-
-                LoginContext context = client.getLoginFuture().get();
-                saveSession(client.exportResumeContext());
-                log.info("登录完成，botId = {}，开始监听消息...", context.getBotId());
-            }
-
-            while (running) {
-                try {
-                    List<WeixinMessage> messages = client.getUpdates();
-                    saveSession(client.exportResumeContext());
-                    if (messages != null) {
-                        for (WeixinMessage msg : messages) {
-                            handleMessage(msg);
-                        }
-                    }
-                    sendCompletedVideo();
-                    sendCompletedReminder();
-                    sendCompletedImageBatch();
-                } catch (SessionExpiredException e) {
-                    log.warn("轮询异常-会话过期: {}", e.getMessage());
-                    log.warn("会话已过期，请重新登录");
-                    deleteSession();
-                    break;
-                } catch (IOException e) {
-                    if (running) {
-                        log.error("消息轮询异常，{}ms 后重试: {}", RETRY_DELAY_MS, e.getMessage());
-                        try {
-                            Thread.sleep(RETRY_DELAY_MS);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                } catch (Exception e) {
-                    if (running) {
-                        log.error("消息轮询异常，{}ms 后重试", RETRY_DELAY_MS, e);
-                        try {
-                            Thread.sleep(RETRY_DELAY_MS);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("微信机器人运行异常", e);
-        }
-    }
-
     /**
      * 消息处理入口：通过 PerUserTaskDispatcher 提交任务，保证每用户串行执行。
      */
