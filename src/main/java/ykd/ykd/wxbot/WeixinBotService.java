@@ -11,6 +11,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
 import ykd.ykd.processor.ProcessResult;
@@ -38,6 +39,7 @@ public class WeixinBotService {
     private static final long RETRY_DELAY_MS = 2_000L;
 
     private final MessageProcessor messageProcessor;
+    private final MemoryManagerService memoryManagerService;
     private final ObjectMapper objectMapper;
     private final PerUserTaskDispatcher dispatcher;
 
@@ -45,8 +47,10 @@ public class WeixinBotService {
     private volatile boolean running = true;
     private final AtomicBoolean pollingStarted = new AtomicBoolean(false);
 
-    public WeixinBotService(MessageProcessor messageProcessor, ObjectMapper objectMapper) {
+    public WeixinBotService(MessageProcessor messageProcessor, MemoryManagerService memoryManagerService,
+                            ObjectMapper objectMapper) {
         this.messageProcessor = messageProcessor;
+        this.memoryManagerService = memoryManagerService;
         this.objectMapper = objectMapper;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
@@ -227,6 +231,7 @@ public class WeixinBotService {
                 return;
             }
             sendResult(result);
+            dispatcher.submit(userId, () -> memoryManagerService.compressIfNeeded(userId));
         });
         if (!accepted) {
             log.warn("任务队列已满，拒绝用户消息: userId={}", userId);
