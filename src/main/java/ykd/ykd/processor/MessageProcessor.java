@@ -12,10 +12,13 @@ import ykd.ykd.exception.BusinessException;
 import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.exception.GlobalExceptionHandler;
 import ykd.ykd.llm.service.LlmService;
+import ykd.ykd.task.ImageBatchManager;
 import ykd.ykd.task.ReminderTaskManager;
 import ykd.ykd.task.VideoTaskManager;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -55,9 +58,11 @@ public class MessageProcessor {
     private final ChatClient agnesClient;
     private final VideoTaskManager videoTaskManager;
     private final ReminderTaskManager reminderTaskManager;
+    private final ImageBatchManager imageBatchManager;
     private final UserContext userContext;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedReminders = new ConcurrentLinkedQueue<>();
+    private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> voiceQueue;
 
     public MessageProcessor(LlmService llmService,
@@ -65,6 +70,7 @@ public class MessageProcessor {
                             ChatClient agnesClient,
                             VideoTaskManager videoTaskManager,
                             ReminderTaskManager reminderTaskManager,
+                            ImageBatchManager imageBatchManager,
                             UserContext userContext,
                             Queue<ProcessResult> voiceQueue) {
         this.llmService = llmService;
@@ -72,6 +78,7 @@ public class MessageProcessor {
         this.agnesClient = agnesClient;
         this.videoTaskManager = videoTaskManager;
         this.reminderTaskManager = reminderTaskManager;
+        this.imageBatchManager = imageBatchManager;
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
     }
@@ -83,6 +90,7 @@ public class MessageProcessor {
     public void init() {
         videoTaskManager.setOnCompleted(completedVideos::add);
         reminderTaskManager.setOnCompleted(completedReminders::add);
+        imageBatchManager.setOnBatchReady(this::processImageBatch);
     }
 
     /**
@@ -101,6 +109,13 @@ public class MessageProcessor {
      */
     public ProcessResult pollCompletedReminder() {
         return completedReminders.poll();
+    }
+
+    /**
+     * 拉取已完成的图片批次结果（非阻塞）。
+     */
+    public ProcessResult pollCompletedImageBatch() {
+        return completedImageBatches.poll();
     }
 
     /**
@@ -126,29 +141,34 @@ public class MessageProcessor {
         String voiceText = extractVoiceText(msg);
 
         String text = extractText(msg);
-        String imageDataUri = extractImageDataUri(msg, client);
+        List<String> imageDataUris = extractImageDataUris(msg, client);
 
         if (voiceText != null && !voiceText.isBlank()) {
             text = (text != null) ? text + " " + voiceText : voiceText;
         }
 
-        if (text == null && imageDataUri == null) {
+        if (text == null && imageDataUris.isEmpty()) {
             log.info("[Processor] 不支持的消息类型: userId={}, itemCount={}", fromUserId, msg.getItem_list().size());
             return null;
         }
 
-        String textPreview = text != null ? (text.length() > 100 ? text.substring(0, 100) + "..." : text) : null;
-        ChatClient aiClient = (imageDataUri != null) ? agnesClient : deepseekClient;
-        String modelName = (imageDataUri != null) ? "Agnes" : "DeepSeek";
+        // 有图片时走批处理：图片进缓冲区，定时器触发后合并处理
+        if (!imageDataUris.isEmpty()) {
+            for (String imageUri : imageDataUris) {
+                imageBatchManager.addImage(fromUserId, imageUri, text);
+            }
+            log.info("[Processor] 图片已交给批处理: userId={}, imageCount={}", fromUserId, imageDataUris.size());
+            return null;
+        }
 
-        log.info("[Processor] 收到消息: userId={}, model={}, text={}, hasImage={}",
-                fromUserId, modelName, textPreview, imageDataUri != null);
+        String textPreview = text != null ? (text.length() > 100 ? text.substring(0, 100) + "..." : text) : null;
+        log.info("[Processor] 收到消息: userId={}, model=DeepSeek, text={}", fromUserId, textPreview);
 
         var result = new ProcessResult[1];
         String finalText = text;
         userContext.executeAs(fromUserId, () -> {
             try {
-                String reply = llmService.chat(finalText, imageDataUri, aiClient, fromUserId);
+                String reply = llmService.chat(finalText, List.of(), deepseekClient, fromUserId);
                 long elapsed = System.currentTimeMillis() - start;
                 String replyPreview = reply != null ? (reply.length() > 200 ? reply.substring(0, 200) + "..." : reply) : null;
                 log.info("[Processor] 回复成功: elapsed={}ms, userId={}, reply={}", elapsed, fromUserId, replyPreview);
@@ -199,16 +219,17 @@ public class MessageProcessor {
     }
 
     /**
-     * 从微信消息中提取第一张图片，下载 CDN 图片并编码为 base64 data URI。
+     * 从微信消息中提取所有图片，下载 CDN 图片并编码为 base64 data URI。
      *
      * <p>注意：不能使用 ImageItem.getUrl()，微信 iLink 图片存储在 CDN 上不暴露公网 URL。
      * 正确路径是 CDNMedia → client.downloadMedia() 下载字节 → Base64 编码。</p>
      *
      * @param msg    微信 iLink 消息对象
      * @param client iLink 客户端，用于调用 {@code downloadMedia()}
-     * @return base64 data URI（如 {@code data:image/jpeg;base64,/9j...}），无图片时返回 {@code null}
+     * @return base64 data URI 列表，无图片时返回空列表
      */
-    private String extractImageDataUri(WeixinMessage msg, ILinkClient client) {
+    private List<String> extractImageDataUris(WeixinMessage msg, ILinkClient client) {
+        List<String> uris = new ArrayList<>();
         for (MessageItem item : msg.getItem_list()) {
             if (item.getImage_item() != null) {
                 CDNMedia media = item.getImage_item().getMedia();
@@ -221,13 +242,14 @@ public class MessageProcessor {
                     }
                     if (imageBytes != null) {
                         log.info("[Processor] CDN图片下载成功: size={}KB", imageBytes.length / 1024);
-                        return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(imageBytes);
+                        uris.add("data:image/jpeg;base64," + Base64.getEncoder().encodeToString(imageBytes));
+                    } else {
+                        log.warn("[Processor] CDN图片下载返回空: userId={}", msg.getFrom_user_id());
                     }
-                    log.warn("[Processor] CDN图片下载返回空: userId={}", msg.getFrom_user_id());
                 }
             }
         }
-        return null;
+        return uris;
     }
 
     /**
@@ -284,5 +306,31 @@ public class MessageProcessor {
             log.error("[Processor] 下载图片失败: url={}", imageUrl, e);
             return null;
         }
+    }
+
+    /**
+     * 处理图片批次回调，由 ImageBatchManager 定时器触发。
+     *
+     * <p>将缓冲区中的多张图片合并，一起交给 AI 处理，结果入队等待 BotService 发送。</p>
+     */
+    private void processImageBatch(ImageBatchManager.ImageBatch batch) {
+        String userId = batch.userId();
+        List<String> imageUris = batch.imageUris();
+        String rawText = batch.text();
+        final String text = (rawText == null || rawText.isBlank()) ? "请描述这些图片" : rawText;
+
+        log.info("[Processor] 图片批次处理: userId={}, imageCount={}, text={}", userId, imageUris.size(), text);
+
+        userContext.executeAs(userId, () -> {
+            try {
+                String reply = llmService.chat(text, imageUris, agnesClient, userId);
+                log.info("[Processor] 图片批次回复: userId={}, reply={}", userId,
+                        reply != null ? reply.substring(0, Math.min(100, reply.length())) : null);
+                completedImageBatches.add(ProcessResult.text(reply, userId));
+            } catch (Exception e) {
+                log.error("[Processor] 图片批次处理失败: userId={}, error={}", userId, e.getMessage(), e);
+                completedImageBatches.add(ProcessResult.text("图片识别失败，请稍后重试", userId));
+            }
+        });
     }
 }

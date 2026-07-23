@@ -28,18 +28,20 @@ public class LlmServiceImpl implements LlmService {
     private final MemoryManagerService memoryManagerService;
     private final CalculatorTools calculatorTools;
     private final TranslateTools translateTools;
+    private final EmailTools emailTools;
 
 
     @Override
-    public String chat(String text, String imageUrl, ChatClient client, String userId) {
+    public String chat(String text, List<String> imageUrls, ChatClient client, String userId) {
         long start = System.currentTimeMillis();
 
-        if ((text == null || text.isBlank()) && imageUrl != null) {
-            text = "请描述这张图片";
+        boolean hasImages = imageUrls != null && !imageUrls.isEmpty();
+        if ((text == null || text.isBlank()) && hasImages) {
+            text = "请描述这些图片";
         }
         String finalText = text;
         String textPreview = finalText != null ? (finalText.length() > 100 ? finalText.substring(0, 100) + "..." : finalText) : null;
-        log.info("[LLM] 请求开始: userId={}, text={}, hasImage={}", userId, textPreview, imageUrl != null);
+        log.info("[LLM] 请求开始: userId={}, text={}, imageCount={}", userId, textPreview, hasImages ? imageUrls.size() : 0);
         try {
             List<Message> history = memoryManagerService.getHistory(userId);
             String content = client.prompt()
@@ -48,8 +50,10 @@ public class LlmServiceImpl implements LlmService {
                         if (finalText != null && !finalText.isBlank()) {
                             userSpec.text(finalText);
                         }
-                        if (imageUrl != null) {
-                            userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
+                        if (hasImages) {
+                            for (String imageUrl : imageUrls) {
+                                userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
+                            }
                         }
                     })
                     .tools(
@@ -61,8 +65,8 @@ public class LlmServiceImpl implements LlmService {
                             reminderTools,
                             locationTools,
                             calculatorTools,
-                            translateTools
-
+                            translateTools,
+                            emailTools
                     )
                     .call()
                     .content();

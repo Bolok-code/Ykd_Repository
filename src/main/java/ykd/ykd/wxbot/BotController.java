@@ -1,6 +1,6 @@
 package ykd.ykd.wxbot;
 
-import jakarta.annotation.PostConstruct;
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,23 +18,6 @@ public class BotController {
 
     public BotController(WeixinBotService weixinBotService) {
         this.weixinBotService = weixinBotService;
-    }
-
-    @PostConstruct
-    private void autoConnect() {
-        if (!weixinBotService.hasSavedSession()) {
-            return;
-        }
-        try {
-            String qrUrl = weixinBotService.login();
-            if (qrUrl == null) {
-                log.info("自动恢复 Session 成功");
-            } else {
-                log.info("需要扫码登录");
-            }
-        } catch (Exception e) {
-            log.debug("自动连接跳过: {}", e.getMessage());
-        }
     }
 
     @GetMapping("/bot/login")
