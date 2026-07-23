@@ -8,19 +8,19 @@ spring:
       client:
         enabled: false
     openai:
-      api-key: sk-xbn6YvBdT1B1PNMkPJa4E15s5beZ7b51hO9gTmv8WQq9R7vM
+      api-key: changeme
       base-url: https://apihub.agnes-ai.com/v1
       chat:
         options:
           model: agnes-2.0-flash
     deepseek:
-      api-key:  sk-90ea4ef2e88d45be98edc09cdc50963e
+      api-key:  changeme
       base-url: https://api.deepseek.com
       chat:
         options:
           model: deepseek-chat
     elevenlabs:
-      api-key: sk_b50fd41d879aabf3a48ca72e6adf83f1afcc977cda8b1e7a
+      api-key: changeme
       base-url: https://api.elevenlabs.io
       tts:
         voice-id: EXAVITQu4vr4xnSDxMaL
