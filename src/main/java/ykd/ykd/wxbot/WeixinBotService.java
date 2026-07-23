@@ -181,6 +181,7 @@ public class WeixinBotService {
                     }
                     sendCompletedVideo();
                     sendCompletedReminder();
+                    sendCompletedImageBatch();
                 } catch (SessionExpiredException e) {
                     log.warn("轮询异常-会话过期: {}", e.getMessage());
                     log.warn("会话已过期，请重新登录");
@@ -285,6 +286,15 @@ public class WeixinBotService {
             log.info("[Bot] 推送提醒: userId={}, text={}", result.userId(), result.text());
             safeSendText(result.userId(), result.text());
             result = messageProcessor.pollCompletedReminder();
+        }
+    }
+
+    private void sendCompletedImageBatch() {
+        ProcessResult result = messageProcessor.pollCompletedImageBatch();
+        while (result != null) {
+            log.info("[Bot] 推送图片批次结果: userId={}", result.userId());
+            safeSendText(result.userId(), result.text());
+            result = messageProcessor.pollCompletedImageBatch();
         }
     }
 
@@ -405,6 +415,20 @@ public class WeixinBotService {
                             sleep(RETRY_DELAY_MS);
                         }
                     }
+                    sendCompletedVideo();
+                    sendCompletedReminder();
+                    sendCompletedImageBatch();
+                } catch (SessionExpiredException e) {
+                    log.warn("轮询异常-会话过期: {}", e.getMessage());
+                    log.warn("会话已过期，请重新登录");
+                    deleteSession();
+                    break;
+                } catch (IOException e) {
+                    log.warn("轮询异常-IO: {}", e.getMessage());
+                    if (running) { sleep(RETRY_DELAY_MS); }
+                } catch (Exception e) {
+                    log.warn("轮询异常: {}", e.getMessage());
+                    if (running) { sleep(RETRY_DELAY_MS); }
                 }
             } finally {
                 pollingStarted.set(false);
