@@ -31,6 +31,7 @@ public class ChatClientConfig {
                         2. 【延迟优先】用户说”X分钟后/小时后/秒后”做某事时，只调用 setReminder，把任务描述作为 message 传入，绝对不要同时调其他工具
                         3. 位置类工具若提示尚未设置位置，直接提醒用户发送”我在XX”设置位置
                         4. 语音播报无明确性别要求时，gender 默认传 “female”
+                        5. 用户发送文件并要求分析、总结、翻译文件内容时，调用 parseDocument 工具
                         """)
                 .build();
     }

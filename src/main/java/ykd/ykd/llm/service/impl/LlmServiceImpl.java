@@ -29,6 +29,7 @@ public class LlmServiceImpl implements LlmService {
     private final CalculatorTools calculatorTools;
     private final TranslateTools translateTools;
     private final EmailTools emailTools;
+    private final DocumentTools documentTools;
 
 
     @Override
@@ -66,7 +67,8 @@ public class LlmServiceImpl implements LlmService {
                             locationTools,
                             calculatorTools,
                             translateTools,
-                            emailTools
+                            emailTools,
+                            documentTools
                     )
                     .call()
                     .content();

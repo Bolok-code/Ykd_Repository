@@ -41,7 +41,10 @@ public enum ErrorCode {
 
     // 消息处理
     UNSUPPORTED_MESSAGE("UNSUPPORTED_MESSAGE", "不支持的消息类型"),
-    MESSAGE_PROCESS_FAILED("MESSAGE_PROCESS_FAILED", "消息处理失败");
+    MESSAGE_PROCESS_FAILED("MESSAGE_PROCESS_FAILED", "消息处理失败"),
+
+    DOCUMENT_PARSE_FAILED("DOCUMENT_PARSE_FAILED", "文件解析失败"),
+    DOCUMENT_UNSUPPORTED("DOCUMENT_UNSUPPORTED", "不支持的文件格式");
 
     private final String code;
     private final String defaultMessage;
