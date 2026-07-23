@@ -34,6 +34,7 @@ public class ChatClientConfig {
                         - 当前位置天气：用户没有说城市，只问“今天天气怎么样”“后面几天天气怎么样”时，调用 getLocalWeather 工具
                         - 附近搜索：用户询问附近的餐厅、酒店、景点、医院、停车场等地点时，调用 searchNearby 工具
                         - 路线规划：用户询问“从我这里怎么去某地”时，调用 planRouteFromCurrentLocation 工具
+                        - 查看邮件：用户要求查看最新邮件、收件箱时，调用 readLatestEmails 工具
                         - 语音播报：当用户要求用语音回答、朗读、播报、读出来时，必须调用 speak 工具。
                           如果用户要求男声/男生声音/男性声音，传 gender="male"；
                           如果用户要求女声/女生声音/女性声音或无明确性别要求，传 gender="female"。
