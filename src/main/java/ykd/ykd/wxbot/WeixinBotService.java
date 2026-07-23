@@ -1,4 +1,4 @@
-package ykd.ykd.wxbot;
+﻿package ykd.ykd.wxbot;
 
 import tools.jackson.databind.ObjectMapper;
 import com.github.wechat.ilink.sdk.ILinkClient;
@@ -377,12 +377,8 @@ public class WeixinBotService {
                             break;
                         }
 
-                        List<WeixinMessage> messages =
-                                currentClient.getUpdates();
-
-                        saveSession(
-                                currentClient.exportResumeContext()
-                        );
+                        List<WeixinMessage> messages = currentClient.getUpdates();
+                        saveSession(currentClient.exportResumeContext());
 
                         if (messages != null) {
                             for (WeixinMessage message : messages) {
@@ -390,45 +386,25 @@ public class WeixinBotService {
                             }
                         }
 
-                        // 推送后台完成的视频
                         sendCompletedVideo();
-
-                        // 推送已经到期的提醒
                         sendCompletedReminder();
+                        sendCompletedImageBatch();
 
                     } catch (SessionExpiredException e) {
                         log.warn("轮询异常-会话过期: {}", e.getMessage());
                         deleteSession();
                         break;
-
                     } catch (IOException e) {
                         log.warn("轮询异常-IO: {}", e.getMessage());
-
                         if (running) {
                             sleep(RETRY_DELAY_MS);
                         }
-
                     } catch (Exception e) {
                         log.error("消息轮询出现异常", e);
-
                         if (running) {
                             sleep(RETRY_DELAY_MS);
                         }
                     }
-                    sendCompletedVideo();
-                    sendCompletedReminder();
-                    sendCompletedImageBatch();
-                } catch (SessionExpiredException e) {
-                    log.warn("轮询异常-会话过期: {}", e.getMessage());
-                    log.warn("会话已过期，请重新登录");
-                    deleteSession();
-                    break;
-                } catch (IOException e) {
-                    log.warn("轮询异常-IO: {}", e.getMessage());
-                    if (running) { sleep(RETRY_DELAY_MS); }
-                } catch (Exception e) {
-                    log.warn("轮询异常: {}", e.getMessage());
-                    if (running) { sleep(RETRY_DELAY_MS); }
                 }
             } finally {
                 pollingStarted.set(false);
@@ -439,7 +415,6 @@ public class WeixinBotService {
         pollThread.setDaemon(true);
         pollThread.start();
     }
-
     private void sleep(long ms) {
         try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
