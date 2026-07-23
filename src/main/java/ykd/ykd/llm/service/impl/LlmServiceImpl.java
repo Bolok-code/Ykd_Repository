@@ -28,6 +28,7 @@ public class LlmServiceImpl implements LlmService {
     private final MemoryManagerService memoryManagerService;
     private final CalculatorTools calculatorTools;
     private final TranslateTools translateTools;
+    private final EmailTools emailTools;
 
 
     @Override
@@ -64,8 +65,8 @@ public class LlmServiceImpl implements LlmService {
                             reminderTools,
                             locationTools,
                             calculatorTools,
-                            translateTools
-
+                            translateTools,
+                            emailTools
                     )
                     .call()
                     .content();
