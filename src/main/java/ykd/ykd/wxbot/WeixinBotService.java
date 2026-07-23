@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 微信 iLink 智能机器人服务。
@@ -42,6 +43,7 @@ public class WeixinBotService {
 
     private ILinkClient client;
     private volatile boolean running = true;
+    private final AtomicBoolean pollingStarted = new AtomicBoolean(false);
 
     public WeixinBotService(MessageProcessor messageProcessor, ObjectMapper objectMapper) {
         this.messageProcessor = messageProcessor;
@@ -56,9 +58,16 @@ public class WeixinBotService {
      */
         @PostConstruct
     public void start() {
-        if (hasSavedSession()) {
-            new Thread(() -> login(), "wx-bot-restore").start();
-        }
+            Thread loginThread = new Thread(()->{
+                if ((hasSavedSession())){
+                    log.info("检测到已保存的 Session，正在恢复微信登录...");
+                }else {
+                    log.info("未检测到Session，正在生成微信登录二维码");
+                }
+                login();
+            }, "wx-bot-login");
+            loginThread.setDaemon(true);
+            loginThread.start();
     }
 
     /**
@@ -134,7 +143,6 @@ public class WeixinBotService {
                     .resumeContext(resumeContext)
                     .build();
             startPolling();
-            log.info("消息轮询线程已启动");
             return null;
         }
 
@@ -351,15 +359,60 @@ public class WeixinBotService {
     }
 
     private void startPolling() {
-        log.info("消息轮询线程已启动 - 开始监听消息");
+        if (!pollingStarted.compareAndSet(false, true)) {
+            log.warn("消息轮询线程已经运行，跳过重复启动");
+            return;
+        }
+
         Thread pollThread = new Thread(() -> {
-            while (running) {
-                try {
-                    List<WeixinMessage> messages = client.getUpdates();
-                    saveSession(client.exportResumeContext());
-                    if (messages != null) {
-                        for (WeixinMessage msg : messages) {
-                            handleMessage(msg);
+            log.info("消息轮询线程已启动 - 开始监听消息");
+
+            try {
+                while (running) {
+                    try {
+                        ILinkClient currentClient = client;
+
+                        if (currentClient == null) {
+                            log.warn("iLink 客户端为空，停止消息轮询");
+                            break;
+                        }
+
+                        List<WeixinMessage> messages =
+                                currentClient.getUpdates();
+
+                        saveSession(
+                                currentClient.exportResumeContext()
+                        );
+
+                        if (messages != null) {
+                            for (WeixinMessage message : messages) {
+                                handleMessage(message);
+                            }
+                        }
+
+                        // 推送后台完成的视频
+                        sendCompletedVideo();
+
+                        // 推送已经到期的提醒
+                        sendCompletedReminder();
+
+                    } catch (SessionExpiredException e) {
+                        log.warn("轮询异常-会话过期: {}", e.getMessage());
+                        deleteSession();
+                        break;
+
+                    } catch (IOException e) {
+                        log.warn("轮询异常-IO: {}", e.getMessage());
+
+                        if (running) {
+                            sleep(RETRY_DELAY_MS);
+                        }
+
+                    } catch (Exception e) {
+                        log.error("消息轮询出现异常", e);
+
+                        if (running) {
+                            sleep(RETRY_DELAY_MS);
                         }
                     }
                     sendCompletedVideo();
@@ -377,8 +430,12 @@ public class WeixinBotService {
                     log.warn("轮询异常: {}", e.getMessage());
                     if (running) { sleep(RETRY_DELAY_MS); }
                 }
+            } finally {
+                pollingStarted.set(false);
+                log.info("消息轮询线程已停止");
             }
         }, "wx-poll");
+
         pollThread.setDaemon(true);
         pollThread.start();
     }
