@@ -256,8 +256,9 @@ public class MessageProcessor {
         }
         Matcher m = URL_PATTERN.matcher(text);
         if (m.find()) {
-            log.info("[Processor] 提取到URL: {}", m.group());
-            return m.group();
+            String url = m.group().replaceAll("[);]+$", "");
+            log.info("[Processor] 提取到URL: {}", url);
+            return url;
         }
         return null;
     }
