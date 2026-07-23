@@ -6,6 +6,7 @@ import com.github.wechat.ilink.sdk.core.model.MessageItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import ykd.ykd.llm.tools.DocumentTools;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 import ykd.ykd.exception.BusinessException;
@@ -135,6 +136,56 @@ public class MessageProcessor {
         if (msg.getItem_list() == null) {
             log.info("[Processor] 收到空消息(无item_list): userId={}", fromUserId);
             return null;
+        }
+
+        if (hasFileItem(msg)) {
+            log.info("[Processor] 检测到文件消息，自动解析: userId={}", fromUserId);
+            String[] result = new String[1];
+            userContext.executeAs(fromUserId, () -> {
+                try {
+                    DocumentTools.setCurrentFile(msg, client);
+                    String reply = llmService.chat(
+                            "用户发送了一份文件，已自动解析。请根据 parseDocument 工具返回的文档内容，给出简要总结，并告知用户可以继续对文件内容提问。",
+                            List.of(), deepseekClient, fromUserId);
+                    result[0] = reply;
+                } catch (Exception e) {
+                    log.error("[Processor] 文件解析失败: {}", e.getMessage(), e);
+                    result[0] = "❌ 文件解析失败，请稍后重试";
+                } finally {
+                    DocumentTools.clearCurrentFile();
+                }
+            });
+            return ProcessResult.text(result[0] != null ? result[0] : "❌ 文件解析失败", fromUserId);
+        }
+
+        if (DocumentTools.hasCachedDocument(fromUserId)) {
+            String voiceText = extractVoiceText(msg);
+            String text = extractText(msg);
+            if (voiceText != null && !voiceText.isBlank()) {
+                text = (text != null) ? text + " " + voiceText : voiceText;
+            }
+
+            if (text != null && !text.isBlank()) {
+                String cachedContent = DocumentTools.getCachedContent(fromUserId);
+                String cachedFileName = DocumentTools.getCachedFileName(fromUserId);
+                log.info("[Processor] 用户对文件追问: userId={}, question={}", fromUserId, text);
+
+                String[] result = new String[1];
+                String finalText = text;
+                userContext.executeAs(fromUserId, () -> {
+                    try {
+                        String prompt = String.format(
+                                "用户之前发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n用户现在针对该文件提问：%s\n请根据文件内容回答用户的问题。",
+                                cachedFileName, cachedContent, finalText);
+                        String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
+                        result[0] = reply;
+                    } catch (Exception e) {
+                        log.error("[Processor] 文件追问处理失败: {}", e.getMessage(), e);
+                        result[0] = "❌ 处理失败，请稍后重试";
+                    }
+                });
+                return ProcessResult.text(result[0] != null ? result[0] : "❌ 处理失败", fromUserId);
+            }
         }
 
         // iLink 平台自动识别语音消息中的文字
@@ -332,5 +383,13 @@ public class MessageProcessor {
                 completedImageBatches.add(ProcessResult.text("图片识别失败，请稍后重试", userId));
             }
         });
+    }
+    private boolean hasFileItem(WeixinMessage msg) {
+        for (MessageItem item : msg.getItem_list()) {
+            if (item.getFile_item() != null) {
+                return true;
+            }
+        }
+        return false;
     }
 }
