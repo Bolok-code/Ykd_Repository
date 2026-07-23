@@ -218,8 +218,9 @@ public class WeixinBotService {
      * 消息处理入口：通过 PerUserTaskDispatcher 提交任务，保证每用户串行执行。
      */
     private void handleMessage(WeixinMessage msg) {
-        log.info("处理消息: from={}, msgId={}", msg.getFrom_user_id(), msg.getMessage_id());
+        log.info("📩 [Bot] 收到微信消息: from={}, msgId={}", msg.getFrom_user_id(), msg.getMessage_id());
         String userId = msg.getFrom_user_id();
+
         boolean accepted = dispatcher.submit(userId, () -> {
             ProcessResult result = messageProcessor.process(msg, client);
             if (result == null) {
