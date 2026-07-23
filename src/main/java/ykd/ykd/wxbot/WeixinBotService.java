@@ -11,6 +11,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
 import ykd.ykd.processor.ProcessResult;
@@ -38,6 +39,7 @@ public class WeixinBotService {
     private static final long RETRY_DELAY_MS = 2_000L;
 
     private final MessageProcessor messageProcessor;
+    private final MemoryManagerService memoryManagerService;
     private final ObjectMapper objectMapper;
     private final PerUserTaskDispatcher dispatcher;
 
@@ -45,8 +47,10 @@ public class WeixinBotService {
     private volatile boolean running = true;
     private final AtomicBoolean pollingStarted = new AtomicBoolean(false);
 
-    public WeixinBotService(MessageProcessor messageProcessor, ObjectMapper objectMapper) {
+    public WeixinBotService(MessageProcessor messageProcessor, MemoryManagerService memoryManagerService,
+                            ObjectMapper objectMapper) {
         this.messageProcessor = messageProcessor;
+        this.memoryManagerService = memoryManagerService;
         this.objectMapper = objectMapper;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
@@ -156,64 +160,6 @@ public class WeixinBotService {
         }
     }
 
-    private void runBot() {
-        try {
-            String qrUrl = login();
-            if (qrUrl != null) {
-                log.info("========================================");
-                log.info("请将以下URL转为二维码后，用微信扫码登录：");
-                log.info("{}", qrUrl);
-                log.info("========================================");
-
-                LoginContext context = client.getLoginFuture().get();
-                saveSession(client.exportResumeContext());
-                log.info("登录完成，botId = {}，开始监听消息...", context.getBotId());
-            }
-
-            while (running) {
-                try {
-                    List<WeixinMessage> messages = client.getUpdates();
-                    saveSession(client.exportResumeContext());
-                    if (messages != null) {
-                        for (WeixinMessage msg : messages) {
-                            handleMessage(msg);
-                        }
-                    }
-                    sendCompletedVideo();
-                    sendCompletedReminder();
-                    sendCompletedImageBatch();
-                } catch (SessionExpiredException e) {
-                    log.warn("轮询异常-会话过期: {}", e.getMessage());
-                    log.warn("会话已过期，请重新登录");
-                    deleteSession();
-                    break;
-                } catch (IOException e) {
-                    if (running) {
-                        log.error("消息轮询异常，{}ms 后重试: {}", RETRY_DELAY_MS, e.getMessage());
-                        try {
-                            Thread.sleep(RETRY_DELAY_MS);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                } catch (Exception e) {
-                    if (running) {
-                        log.error("消息轮询异常，{}ms 后重试", RETRY_DELAY_MS, e);
-                        try {
-                            Thread.sleep(RETRY_DELAY_MS);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("微信机器人运行异常", e);
-        }
-    }
-
     /**
      * 消息处理入口：通过 PerUserTaskDispatcher 提交任务，保证每用户串行执行。
      */
@@ -227,6 +173,7 @@ public class WeixinBotService {
                 return;
             }
             sendResult(result);
+            dispatcher.submit(userId, () -> memoryManagerService.compressIfNeeded(userId));
         });
         if (!accepted) {
             log.warn("任务队列已满，拒绝用户消息: userId={}", userId);

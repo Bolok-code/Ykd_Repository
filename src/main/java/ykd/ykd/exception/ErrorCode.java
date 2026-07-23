@@ -4,7 +4,11 @@ import lombok.Getter;
 
 @Getter
 public enum ErrorCode {
-
+    // 联网搜索
+    WEB_SEARCH_FAILED(
+            "WEB_SEARCH_FAILED",
+            "联网搜索失败，请稍后重试"
+    ),
     // 天气
     API_ERROR("API_ERROR", "高德API调用失败"),
     CITY_NOT_FOUND("CITY_NOT_FOUND", "未找到对应城市"),

@@ -29,3 +29,9 @@ spring:
 
 gaode:
   key: changeme
+web-search:
+  enabled: ${WEB_SEARCH_ENABLED:false}
+  api-key: ${VOLCENGINE_SEARCH_API_KEY:}
+  endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
+  max-results: ${WEB_SEARCH_MAX_RESULTS:5}
+  timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}

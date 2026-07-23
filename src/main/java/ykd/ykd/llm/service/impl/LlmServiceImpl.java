@@ -17,7 +17,7 @@ import java.util.List;
 @RequiredArgsConstructor
 @Service
 public class LlmServiceImpl implements LlmService {
-
+    private final WebSearchTools webSearchTools;
     private final LinkTools linkTools;
     private final WeatherTools weatherTools;
     private final ImageTools imageTools;
@@ -69,6 +69,7 @@ public class LlmServiceImpl implements LlmService {
                             translateTools,
                             emailTools,
                             documentTools
+                            webSearchTools
                     )
                     .call()
                     .content();
