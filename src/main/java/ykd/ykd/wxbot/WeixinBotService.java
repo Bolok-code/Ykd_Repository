@@ -11,6 +11,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
 import ykd.ykd.processor.ProcessResult;
@@ -38,6 +39,7 @@ public class WeixinBotService {
     private static final long RETRY_DELAY_MS = 2_000L;
 
     private final MessageProcessor messageProcessor;
+    private final MemoryManagerService memoryManagerService;
     private final ObjectMapper objectMapper;
     private final PerUserTaskDispatcher dispatcher;
 
@@ -45,8 +47,10 @@ public class WeixinBotService {
     private volatile boolean running = true;
     private final AtomicBoolean pollingStarted = new AtomicBoolean(false);
 
-    public WeixinBotService(MessageProcessor messageProcessor, ObjectMapper objectMapper) {
+    public WeixinBotService(MessageProcessor messageProcessor, MemoryManagerService memoryManagerService,
+                            ObjectMapper objectMapper) {
         this.messageProcessor = messageProcessor;
+        this.memoryManagerService = memoryManagerService;
         this.objectMapper = objectMapper;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
@@ -227,6 +231,7 @@ public class WeixinBotService {
                 return;
             }
             sendResult(result);
+            dispatcher.submit(userId, () -> memoryManagerService.compressIfNeeded(userId));
         });
         if (!accepted) {
             log.warn("任务队列已满，拒绝用户消息: userId={}", userId);
@@ -378,12 +383,8 @@ public class WeixinBotService {
                             break;
                         }
 
-                        List<WeixinMessage> messages =
-                                currentClient.getUpdates();
-
-                        saveSession(
-                                currentClient.exportResumeContext()
-                        );
+                        List<WeixinMessage> messages = currentClient.getUpdates();
+                        saveSession(currentClient.exportResumeContext());
 
                         if (messages != null) {
                             for (WeixinMessage message : messages) {
@@ -391,36 +392,21 @@ public class WeixinBotService {
                             }
                         }
 
-                        // 推送后台完成的视频
                         sendCompletedVideo();
-
-                        // 推送已经到期的提醒
                         sendCompletedReminder();
-
-                        // 推送已经处理完成的图片批次
                         sendCompletedImageBatch();
 
                     } catch (SessionExpiredException e) {
-                        log.warn(
-                                "轮询异常-会话过期: {}",
-                                e.getMessage()
-                        );
+                        log.warn("轮询异常-会话过期: {}", e.getMessage());
                         deleteSession();
                         break;
-
                     } catch (IOException e) {
-                        log.warn(
-                                "轮询异常-IO: {}",
-                                e.getMessage()
-                        );
-
+                        log.warn("轮询异常-IO: {}", e.getMessage());
                         if (running) {
                             sleep(RETRY_DELAY_MS);
                         }
-
                     } catch (Exception e) {
                         log.error("消息轮询出现异常", e);
-
                         if (running) {
                             sleep(RETRY_DELAY_MS);
                         }
@@ -435,7 +421,6 @@ public class WeixinBotService {
         pollThread.setDaemon(true);
         pollThread.start();
     }
-
     private void sleep(long ms) {
         try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
