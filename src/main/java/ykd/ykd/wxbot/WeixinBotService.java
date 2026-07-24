@@ -173,8 +173,8 @@ public class WeixinBotService {
                 return;
             }
             sendResult(result);
-            dispatcher.submit(userId, () -> memoryManagerService.compressIfNeeded(userId));
         });
+
         if (!accepted) {
             log.warn("任务队列已满，拒绝用户消息: userId={}", userId);
             safeSendText(userId, "⏳ 当前消息过多，请稍后再试");

@@ -4,6 +4,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
@@ -45,7 +47,7 @@ public class LlmServiceImpl implements LlmService {
         log.info("[LLM] 请求开始: userId={}, text={}, imageCount={}", userId, textPreview, hasImages ? imageUrls.size() : 0);
         try {
             List<Message> history = memoryManagerService.getHistory(userId);
-            String content = client.prompt()
+            ChatResponse chatResponse = client.prompt()
                     .messages(history)
                     .user(userSpec -> {
                         if (finalText != null && !finalText.isBlank()) {
@@ -68,13 +70,20 @@ public class LlmServiceImpl implements LlmService {
                             calculatorTools,
                             translateTools,
                             emailTools,
-                            documentTools
+                            documentTools,
                             webSearchTools
                     )
                     .call()
-                    .content();
+                    .chatResponse();
 
+            String content = chatResponse.getResult().getOutput().getText();
             memoryManagerService.save(userId, finalText, content);
+
+            Usage usage = chatResponse.getMetadata().getUsage();
+            if (usage != null) {
+                int promptTokens = (int) usage.getPromptTokens();
+                memoryManagerService.compressIfNeeded(userId, promptTokens);
+            }
 
             long elapsed = System.currentTimeMillis() - start;
             String replyPreview = content != null ? (content.length() > 200 ? content.substring(0, 200) + "..." : content) : null;
