@@ -1,4 +1,4 @@
-package ykd.ykd.wxbot;
+﻿package ykd.ykd.wxbot;
 
 import tools.jackson.databind.ObjectMapper;
 import com.github.wechat.ilink.sdk.ILinkClient;
@@ -106,6 +106,7 @@ public class WeixinBotService {
      * 触发登录，返回 QR 码 URL（需扫码）或 null（Session 已恢复）。
      */
     public String login() {
+        running = true;
         if (client != null) {
             closeClient();
         }
@@ -173,8 +174,8 @@ public class WeixinBotService {
                 return;
             }
             sendResult(result);
-            dispatcher.submit(userId, () -> memoryManagerService.compressIfNeeded(userId));
         });
+
         if (!accepted) {
             log.warn("任务队列已满，拒绝用户消息: userId={}", userId);
             safeSendText(userId, "⏳ 当前消息过多，请稍后再试");
