@@ -1,13 +1,11 @@
 package ykd.ykd.llm.tools;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URI;
 
 @Slf4j
 @Component
@@ -19,41 +17,25 @@ public class LinkTools {
         long start = System.currentTimeMillis();
         log.info("[LinkTool] 被调用: url={}", url);
         try {
-            URI uri = URI.create(url);
-            HttpURLConnection conn = (HttpURLConnection) uri.toURL().openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(15000);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.setInstanceFollowRedirects(true);
+            Document doc = Jsoup.connect(url)
+                    .timeout(15000)
+                    .userAgent("Mozilla/5.0")
+                    .followRedirects(true)
+                    .get();
 
-            int code = conn.getResponseCode();
-            if (code != 200) {
-                return "❌ 访问链接失败，HTTP状态码: " + code;
-            }
-            String contentType = conn.getContentType();
-            if (contentType != null && !contentType.startsWith("text/html") && !contentType.startsWith("text/plain")) {
-                return "⛔ 链接内容类型为 " + contentType + "，暂不支持读取";
+            String title = doc.title().trim();
+            String text = doc.body().text().trim();
+
+            if (text.isEmpty()) {
+                return "⛔ 该页面没有可读取的文本内容";
             }
 
-            StringBuilder sb = new StringBuilder();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
-            String line;
-            int totalRead = 0;
-            while ((line = reader.readLine()) != null && totalRead < 50000) {
-                // 简单去除HTML标签
-                String clean = line.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
-                if (!clean.isEmpty()) {
-                    sb.append(clean).append("\n");
-                    totalRead += clean.length();
-                }
-            }
-            reader.close();
-
-            String content = sb.length() > 3000 ? sb.substring(0, 3000) + "..." : sb.toString();
+            text = text.length() > 3000 ? text.substring(0, 3000) + "..." : text;
             long elapsed = System.currentTimeMillis() - start;
-            log.info("[LinkTool] 读取成功: elapsed={}ms, url={}, chars={}", elapsed, url, content.length());
-            return "以下是链接内容摘要：\n" + content;
+            log.info("[LinkTool] 读取成功: elapsed={}ms, url={}, title={}, chars={}", elapsed, url, title, text.length());
+
+            String result = title.isEmpty() ? "" : "标题：" + title + "\n\n";
+            return result + "以下是链接内容摘要：\n" + text;
 
         } catch (IllegalArgumentException e) {
             log.error("[LinkTool] URL格式错误: url={}", url, e);
