@@ -68,7 +68,7 @@ public class LlmServiceImpl implements LlmService {
                             calculatorTools,
                             translateTools,
                             emailTools,
-                            documentTools
+                            documentTools,
                             webSearchTools
                     )
                     .call()

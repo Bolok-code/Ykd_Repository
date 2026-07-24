@@ -6,6 +6,7 @@ import com.github.wechat.ilink.sdk.core.model.MessageItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import ykd.ykd.document.DocumentParsingService;
 import ykd.ykd.llm.tools.DocumentTools;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
@@ -61,6 +62,7 @@ public class MessageProcessor {
     private final ReminderTaskManager reminderTaskManager;
     private final ImageBatchManager imageBatchManager;
     private final UserContext userContext;
+    private final DocumentParsingService documentParsingService;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedReminders = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
@@ -73,7 +75,8 @@ public class MessageProcessor {
                             ReminderTaskManager reminderTaskManager,
                             ImageBatchManager imageBatchManager,
                             UserContext userContext,
-                            Queue<ProcessResult> voiceQueue) {
+                            Queue<ProcessResult> voiceQueue,
+                            DocumentParsingService documentParsingService) {
         this.llmService = llmService;
         this.deepseekClient = deepseekClient;
         this.agnesClient = agnesClient;
@@ -82,6 +85,7 @@ public class MessageProcessor {
         this.imageBatchManager = imageBatchManager;
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
+        this.documentParsingService = documentParsingService;
     }
 
     /**
@@ -143,19 +147,25 @@ public class MessageProcessor {
             String[] result = new String[1];
             userContext.executeAs(fromUserId, () -> {
                 try {
-                    DocumentTools.setCurrentFile(msg, client);
-                    String reply = llmService.chat(
-                            "用户发送了一份文件，已自动解析。请根据 parseDocument 工具返回的文档内容，给出简要总结，并告知用户可以继续对文件内容提问。",
-                            List.of(), deepseekClient, fromUserId);
+                    String fileName = DocumentTools.downloadParseAndCache(
+                            msg, client, fromUserId, documentParsingService);
+                    if (fileName == null) {
+                        result[0] = "❌ 文件下载或解析失败，请稍后重试";
+                        return;
+                    }
+
+                    String cachedContent = DocumentTools.getCachedContent(fromUserId);
+                    String prompt = String.format(
+                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结，并告知用户可以继续对文件内容提问。",
+                            fileName, cachedContent);
+                    String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
                     result[0] = reply;
                 } catch (Exception e) {
-                    log.error("[Processor] 文件解析失败: {}", e.getMessage(), e);
-                    result[0] = "❌ 文件解析失败，请稍后重试";
-                } finally {
-                    DocumentTools.clearCurrentFile();
+                    log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
+                    result[0] = "❌ 文件处理失败，请稍后重试";
                 }
             });
-            return ProcessResult.text(result[0] != null ? result[0] : "❌ 文件解析失败", fromUserId);
+            return ProcessResult.text(result[0] != null ? result[0] : "❌ 文件处理失败", fromUserId);
         }
 
         if (DocumentTools.hasCachedDocument(fromUserId)) {

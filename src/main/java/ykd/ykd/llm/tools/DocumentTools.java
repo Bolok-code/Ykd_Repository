@@ -8,8 +8,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import ykd.ykd.document.ParseResult;
 import ykd.ykd.exception.ErrorCode;
-import ykd.ykd.llm.service.DocumentParsingService;
+import ykd.ykd.document.DocumentParsingService;
 import ykd.ykd.processor.UserContext;
 
 import java.nio.file.Files;
@@ -64,39 +65,49 @@ public class DocumentTools {
         userDocumentCache.remove(userId);
     }
 
-    public static String parseAndCacheFile(WeixinMessage msg, ILinkClient client) {
+    public static String downloadParseAndCache(WeixinMessage msg, ILinkClient client, String userId,
+                                               DocumentParsingService parsingService) {
         if (msg.getItem_list() == null) return null;
 
         for (MessageItem item : msg.getItem_list()) {
             CDNMedia media = extractFileMedia(item);
             if (media != null) {
+                Path tempFile = null;
                 try {
                     byte[] fileBytes = client.downloadMedia(media);
                     if (fileBytes == null || fileBytes.length == 0) {
+                        log.warn("[DocumentTools] CDN文件下载返回空");
                         return null;
                     }
 
                     String fileName = extractFileName(msg);
                     String ext = getExtension(fileName);
-                    Path tempFile = Files.createTempFile("doc-", "." + ext);
+                    tempFile = Files.createTempFile("doc-", "." + ext);
                     Files.write(tempFile, fileBytes);
+                    log.info("[DocumentTools] 文件下载成功: name={}, size={}KB", fileName, fileBytes.length / 1024);
 
-                    try {
-                        DocumentParsingService.ParseResult result = new DocumentParsingService() {{
-                        }}.parse(tempFile, fileName);
-                        return result.text();
-                    } finally {
-                        Files.deleteIfExists(tempFile);
+                    ParseResult result = parsingService.parse(tempFile, fileName);
+
+                    if (result.text().isBlank()) {
+                        return "⚠️ 文件内容为空或无法提取文字（可能是扫描版PDF/图片型文档）";
                     }
+
+                    cacheDocument(userId, fileName, result.text());
+                    return fileName;
 
                 } catch (Exception e) {
                     log.error("[DocumentTools] 文件解析失败: {}", e.getMessage(), e);
                     return null;
+                } finally {
+                    if (tempFile != null) {
+                        try { Files.deleteIfExists(tempFile); } catch (Exception ignored) {}
+                    }
                 }
             }
         }
         return null;
     }
+
 
     @Tool(description = "解析并阅读用户发送的文件内容。支持PDF、Word、Excel、TXT等格式。当用户发送文件并要求总结、分析、翻译、提取信息时调用此工具")
     public String parseDocument(
@@ -118,7 +129,7 @@ public class DocumentTools {
             }
 
             String fileName = extractFileName(ctx.msg);
-            DocumentParsingService.ParseResult result = documentParsingService.parse(tempFile, fileName);
+            ParseResult result = documentParsingService.parse(tempFile, fileName);
 
             if (result.text().isBlank()) {
                 return "⚠️ 文件内容为空或无法提取文字（可能是扫描版PDF/图片型文档）";
@@ -143,7 +154,7 @@ public class DocumentTools {
         }
     }
 
-    private String buildResponse(DocumentParsingService.ParseResult result, String question, String fileName) {
+    private String buildResponse(ParseResult result, String question, String fileName) {
         StringBuilder sb = new StringBuilder();
         sb.append("📄 文件解析结果：\n");
         sb.append("文件名：").append(fileName).append("\n");
