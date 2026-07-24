@@ -57,22 +57,37 @@ public class MemoryManagerService {
         log.info("[MemoryManager] 清除记忆: userId={}", userId);
     }
 
-    /**
-     * 历史消息超过阈值时将老消息压缩为摘要，保留最近对话原文。
-     *
-     * <p>需在 per-user 串行上下文中调用以保证 {@code clear() + add()} 原子性。</p>
-     */
-    public void compressIfNeeded(String userId) {
+    private static final int COMPRESS_THRESHOLD_TOKENS = 6000;
+    private static final int KEEP_RECENT_TOKENS = 2500;
+
+    public void compressIfNeeded(String userId, int promptTokens) {
         List<Message> history = chatMemory.get(userId);
-        if (history == null || history.size() < 30) {
+        if (history == null) {
+            return;
+        }
+        int actualTokens = promptTokens > 0 ? promptTokens : estimateTokens(history);
+        if (actualTokens < COMPRESS_THRESHOLD_TOKENS) {
             return;
         }
 
-        List<Message> toCompress = new ArrayList<>(history.subList(0, 20));
-        List<Message> recent = new ArrayList<>(history.subList(20, history.size()));
+        int keepTokens = 0;
+        int splitIdx = history.size();
+        for (int i = history.size() - 1; i >= 0; i--) {
+            keepTokens += estimateTokens(history.get(i));
+            if (keepTokens >= KEEP_RECENT_TOKENS) {
+                splitIdx = i;
+                break;
+            }
+        }
+        if (splitIdx <= 0) {
+            return;
+        }
 
-        log.info("[MemoryManager] 开始压缩: userId={}, 压缩{}条→摘要, 保留{}条",
-                userId, toCompress.size(), recent.size());
+        List<Message> toCompress = new ArrayList<>(history.subList(0, splitIdx));
+        List<Message> recent = new ArrayList<>(history.subList(splitIdx, history.size()));
+
+        log.info("[MemoryManager] 开始压缩: userId={}, 总token≈{}, 压缩{}条→摘要, 保留{}条",
+                userId, estimateTokens(history), toCompress.size(), recent.size());
 
         String summary;
         try {
@@ -96,7 +111,23 @@ public class MemoryManagerService {
         replacement.addAll(recent);
         chatMemory.add(userId, replacement);
 
-        log.info("[MemoryManager] 压缩完成: userId={}, 摘要长度={}, 总计{}条",
-                userId, summary.length(), replacement.size());
+        log.info("[MemoryManager] 压缩完成: userId={}, 摘要长度={}, 保留{}条≈{}token",
+                userId, summary.length(), recent.size(), estimateTokens(recent));
+    }
+
+    private int estimateTokens(List<Message> messages) {
+        int chars = 0;
+        for (Message msg : messages) {
+            String text = msg.getText();
+            if (text != null) {
+                chars += text.length();
+            }
+        }
+        return chars / 3;
+    }
+
+    private int estimateTokens(Message msg) {
+        String text = msg.getText();
+        return text != null ? text.length() / 3 : 0;
     }
 }
