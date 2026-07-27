@@ -175,6 +175,13 @@ public class MessageProcessor {
                 text = (text != null) ? text + " " + voiceText : voiceText;
             }
 
+            if (text != null && !text.isBlank() && isStopFollowUp(text)) {
+                DocumentTools.clearCachedDocument(fromUserId);
+                log.info("[Processor] 用户停止文件追问: userId={}", fromUserId);
+                return ProcessResult.text("✅ 已退出文件问答模式，回到正常对话。", fromUserId);
+            }
+
+
             if (text != null && !text.isBlank()) {
                 String cachedContent = DocumentTools.getCachedContent(fromUserId);
                 String cachedFileName = DocumentTools.getCachedFileName(fromUserId);
@@ -401,5 +408,13 @@ public class MessageProcessor {
             }
         }
         return false;
+    }
+
+    private boolean isStopFollowUp(String text) {
+        String trimmed = text.trim();
+        return trimmed.equals("停止追问")
+                || trimmed.equals("退出追问")
+                || trimmed.equals("停止文件问答")
+                || trimmed.equals("退出文件问答");
     }
 }

@@ -18,7 +18,7 @@ spring:
       base-url: https://api.deepseek.com
       chat:
         options:
-          model: deepseek-chat
+          model: deepseek-v4-flash
     elevenlabs:
       api-key: changeme
       base-url: https://api.elevenlabs.io

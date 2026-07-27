@@ -81,6 +81,36 @@ public class EmailServiceImpl implements EmailService {
         }
     }
 
+    @Override
+    public EmailMessage fetchByIndex(EmailAccount account, int index) {
+        Folder inbox = null;
+        Store store = null;
+
+        try {
+            store = connectStore(account);
+            inbox = store.getFolder("INBOX");
+            inbox.open(Folder.READ_ONLY);
+
+            int total = inbox.getMessageCount();
+            int msgNum = total - index + 1;
+            if (msgNum < 1 || msgNum > total) {
+                throw new IllegalArgumentException("邮件序号无效，当前共 " + total + " 封邮件");
+            }
+
+            Message message = inbox.getMessage(msgNum);
+            EmailMessage result = toEmailMessage(message);
+
+            log.info("[EmailService] 获取邮件详情成功: index={}, subject={}", index, result.subject());
+            return result;
+
+        } catch (Exception e) {
+            log.error("[EmailService] 获取邮件详情失败: index={}, error={}", index, e.getMessage(), e);
+            throw new RuntimeException("获取邮件详情失败: " + e.getMessage(), e);
+        } finally {
+            closeQuietly(inbox, store);
+        }
+    }
+
     private Store connectStore(EmailAccount account) throws MessagingException {
         Properties props = new Properties();
         String protocol = account.ssl() ? "imaps" : "imap";
@@ -198,4 +228,5 @@ public class EmailServiceImpl implements EmailService {
         try { if (folder != null && folder.isOpen()) folder.close(false); } catch (Exception ignored) {}
         try { if (store != null && store.isConnected()) store.close(); } catch (Exception ignored) {}
     }
+
 }

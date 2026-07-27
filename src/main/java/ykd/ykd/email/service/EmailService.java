@@ -10,6 +10,7 @@ public interface EmailService {
 
     List<EmailMessage> search(EmailAccount account, String keyword, String sender, int maxResults);
 
+    EmailMessage fetchByIndex(EmailAccount account, int index);
     record EmailMessage(
             String from,
             String to,

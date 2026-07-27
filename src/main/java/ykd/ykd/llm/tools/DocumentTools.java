@@ -118,6 +118,23 @@ public class DocumentTools {
 
         FileContext ctx = currentFile.get();
         if (ctx == null) {
+            if (userId != null && hasCachedDocument(userId)) {
+                String cachedContent = getCachedContent(userId);
+                String cachedFileName = getCachedFileName(userId);
+                log.info("[DocumentTools] currentFile为空但有缓存文档，使用缓存: userId={}", userId);
+                StringBuilder sb = new StringBuilder();
+                sb.append("📄 文件解析结果：\n");
+                sb.append("文件名：").append(cachedFileName).append("\n\n");
+                sb.append("--- 文档内容 ---\n");
+                sb.append(cachedContent).append("\n");
+                sb.append("--- 内容结束 ---\n\n");
+                if (question != null && !question.isBlank()) {
+                    sb.append("用户的问题是：").append(question);
+                } else {
+                    sb.append("请根据以上文档内容，给出简要总结。");
+                }
+                return sb.toString();
+            }
             return "❌ 未检测到文件，请先发送文件";
         }
 
