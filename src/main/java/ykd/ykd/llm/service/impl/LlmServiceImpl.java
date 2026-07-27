@@ -77,7 +77,8 @@ public class LlmServiceImpl implements LlmService {
                     .chatResponse();
 
             String content = chatResponse.getResult().getOutput().getText();
-            memoryManagerService.save(userId, finalText, content);
+            String modelName = hasImages ? "Agnes" : "DeepSeek";
+            memoryManagerService.save(userId, finalText, content, modelName);
 
             Usage usage = chatResponse.getMetadata().getUsage();
             if (usage != null) {
