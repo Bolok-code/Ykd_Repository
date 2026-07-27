@@ -18,7 +18,7 @@ import java.util.Properties;
 @Service
 public class EmailServiceImpl implements EmailService {
 
-    private static final int MAX_BODY_LENGTH = 2000;
+    private static final int MAX_BODY_LENGTH = 10000;
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
 
     @Override

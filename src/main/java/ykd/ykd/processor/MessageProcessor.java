@@ -156,10 +156,11 @@ public class MessageProcessor {
 
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
                     String prompt = String.format(
-                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结，并告知用户可以继续对文件内容提问。",
+                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结。",
                             fileName, cachedContent);
                     String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
                     result[0] = reply;
+                    DocumentTools.clearCachedDocument(fromUserId);
                 } catch (Exception e) {
                     log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
                     result[0] = "❌ 文件处理失败，请稍后重试";

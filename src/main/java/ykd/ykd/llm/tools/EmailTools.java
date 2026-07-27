@@ -12,6 +12,7 @@ import ykd.ykd.processor.UserContext;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
@@ -20,6 +21,7 @@ public class EmailTools {
     private final EmailService emailService;
     private final EmailAccountRepository emailAccountRepository;
     private final UserContext userContext;
+    private final Map<String, List<EmailService.EmailMessage>> lastFetchedCache = new ConcurrentHashMap<>();
 
     private static final Map<String, String[]> PROVIDER_IMAP = new HashMap<>();
 
@@ -97,6 +99,7 @@ public class EmailTools {
         try {
             int actualCount = count <= 0 ? 5 : Math.min(count, 20);
             List<EmailService.EmailMessage> messages = emailService.fetchLatest(account, actualCount);
+            lastFetchedCache.put(userId, messages);
 
             if (messages.isEmpty()) {
                 return "📭 收件箱中没有邮件";
