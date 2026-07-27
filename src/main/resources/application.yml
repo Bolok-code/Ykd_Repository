@@ -3,6 +3,12 @@
     name: ykd
   config:
     import: optional:file:./config/application-local.yml
+  datasource:
+    url: jdbc:sqlite:data/ykd.db
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
   ai:
     chat:
       client:

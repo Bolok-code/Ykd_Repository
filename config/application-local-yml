@@ -1,0 +1,17 @@
+spring:
+  ai:
+    openai:
+      api-key: sk-xbn6YvBdT1B1PNMkPJa4E15s5beZ7b51hO9gTmv8WQq9R7vM
+    deepseek:
+      api-key: sk-c0f05bb91964495d8ca93c3b51b9204e
+    elevenlabs:
+      api-key: sk_b50fd41d879aabf3a48ca72e6adf83f1afcc977cda8b1e7a
+
+gaode:
+  key: 38be8ea8e5cf8a0903b7e3b8ef236e61
+web-search:
+  enabled: ${WEB_SEARCH_ENABLED:false}
+  api-key: ${VOLCENGINE_SEARCH_API_KEY:}
+  endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
+  max-results: ${WEB_SEARCH_MAX_RESULTS:5}
+  timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
