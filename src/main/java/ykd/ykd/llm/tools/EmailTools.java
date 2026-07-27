@@ -12,6 +12,7 @@ import ykd.ykd.processor.UserContext;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
@@ -20,6 +21,7 @@ public class EmailTools {
     private final EmailService emailService;
     private final EmailAccountRepository emailAccountRepository;
     private final UserContext userContext;
+    private final Map<String, List<EmailService.EmailMessage>> lastFetchedCache = new ConcurrentHashMap<>();
 
     private static final Map<String, String[]> PROVIDER_IMAP = new HashMap<>();
 
@@ -97,6 +99,7 @@ public class EmailTools {
         try {
             int actualCount = count <= 0 ? 5 : Math.min(count, 20);
             List<EmailService.EmailMessage> messages = emailService.fetchLatest(account, actualCount);
+            lastFetchedCache.put(userId, messages);
 
             if (messages.isEmpty()) {
                 return "📭 收件箱中没有邮件";
@@ -177,7 +180,40 @@ public class EmailTools {
         }
     }
 
-    private String maskEmail(String email) {
+    @Tool(description = "查看某封邮件的完整正文内容。先调用 readLatestEmails 获取邮件列表，再使用此工具查看具体某一封邮件的全文。序号来自 readLatestEmails 返回的列表")
+    public String readEmailDetail(
+            @ToolParam(description = "邮件序号，从1开始，如 1 表示第1封邮件") int index) {
+        String userId = userContext.getCurrentUserId();
+        if (userId == null) return "❌ 无法识别用户身份";
+
+        List<EmailService.EmailMessage> cached = lastFetchedCache.get(userId);
+        if (cached == null || cached.isEmpty()) {
+            return "⚠️ 请先调用 readLatestEmails 查看邮件列表";
+        }
+
+        if (index < 1 || index > cached.size()) {
+            return "❌ 序号无效，当前共有 " + cached.size() + " 封邮件，请输入 1~" + cached.size();
+        }
+
+        EmailService.EmailMessage msg = cached.get(index - 1);
+        log.info("[EmailTools] 查看邮件详情: userId={}, index={}, subject={}", userId, index, msg.subject());
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("📧 邮件详情\n");
+        sb.append("主题：").append(msg.subject()).append("\n");
+        sb.append("发件人：").append(msg.from()).append("\n");
+        if (msg.to() != null && !msg.to().isBlank()) {
+            sb.append("收件人：").append(msg.to()).append("\n");
+        }
+        sb.append("时间：").append(msg.date()).append("\n\n");
+        sb.append("--- 正文 ---\n");
+        sb.append(msg.body().isBlank() ? "(无正文内容)" : msg.body());
+        sb.append("\n--- 正文结束 ---");
+
+        return sb.toString();
+    }
+
+        private String maskEmail(String email) {
         int atIdx = email.indexOf("@");
         if (atIdx <= 2) return email;
         return email.substring(0, 2) + "***" + email.substring(atIdx);

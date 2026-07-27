@@ -156,46 +156,17 @@ public class MessageProcessor {
 
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
                     String prompt = String.format(
-                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结，并告知用户可以继续对文件内容提问。",
+                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结。",
                             fileName, cachedContent);
                     String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
                     result[0] = reply;
+                    DocumentTools.clearCachedDocument(fromUserId);
                 } catch (Exception e) {
                     log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
                     result[0] = "❌ 文件处理失败，请稍后重试";
                 }
             });
             return ProcessResult.text(result[0] != null ? result[0] : "❌ 文件处理失败", fromUserId);
-        }
-
-        if (DocumentTools.hasCachedDocument(fromUserId)) {
-            String voiceText = extractVoiceText(msg);
-            String text = extractText(msg);
-            if (voiceText != null && !voiceText.isBlank()) {
-                text = (text != null) ? text + " " + voiceText : voiceText;
-            }
-
-            if (text != null && !text.isBlank()) {
-                String cachedContent = DocumentTools.getCachedContent(fromUserId);
-                String cachedFileName = DocumentTools.getCachedFileName(fromUserId);
-                log.info("[Processor] 用户对文件追问: userId={}, question={}", fromUserId, text);
-
-                String[] result = new String[1];
-                String finalText = text;
-                userContext.executeAs(fromUserId, () -> {
-                    try {
-                        String prompt = String.format(
-                                "用户之前发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n用户现在针对该文件提问：%s\n请根据文件内容回答用户的问题。",
-                                cachedFileName, cachedContent, finalText);
-                        String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
-                        result[0] = reply;
-                    } catch (Exception e) {
-                        log.error("[Processor] 文件追问处理失败: {}", e.getMessage(), e);
-                        result[0] = "❌ 处理失败，请稍后重试";
-                    }
-                });
-                return ProcessResult.text(result[0] != null ? result[0] : "❌ 处理失败", fromUserId);
-            }
         }
 
         // iLink 平台自动识别语音消息中的文字
