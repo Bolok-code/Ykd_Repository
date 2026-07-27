@@ -15,8 +15,6 @@ import java.util.List;
 public class ConversationHistoryServiceImpl
         implements ConversationHistoryService {
 
-    private static final int MAX_HISTORY_LIMIT = 40;
-
     private final ConversationMessageMapper conversationMessageMapper;
 
     @Override
@@ -28,10 +26,7 @@ public class ConversationHistoryServiceImpl
             throw new IllegalArgumentException("userId不能为空");
         }
 
-        int safeLimit = Math.max(
-                1,
-                Math.min(limit, MAX_HISTORY_LIMIT)
-        );
+        int safeLimit = Math.max(1, limit);
 
         return conversationMessageMapper.findRecentByUserId(
                 userId,
@@ -95,5 +90,51 @@ public class ConversationHistoryServiceImpl
         }
 
         return conversationMessageMapper.deleteByUserId(userId);
+    }
+
+    @Override
+    public List<ConversationMessage> findAllMessages(String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId不能为空");
+        }
+        return conversationMessageMapper.findAllByUserId(userId);
+    }
+
+    @Override
+    @Transactional
+    public void replaceHistory(String userId,
+                               String summaryContent,
+                               List<ConversationMessage> recentMessages) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId不能为空");
+        }
+
+        conversationMessageMapper.deleteByUserId(userId);
+
+        String createdAt = java.time.LocalDateTime.now().toString();
+
+        ConversationMessage summaryMessage = new ConversationMessage(
+                null,
+                userId,
+                "assistant",
+                summaryContent,
+                "text",
+                null,
+                createdAt
+        );
+        conversationMessageMapper.insert(summaryMessage);
+
+        for (ConversationMessage message : recentMessages) {
+            ConversationMessage copy = new ConversationMessage(
+                    null,
+                    userId,
+                    message.getRole(),
+                    message.getContent(),
+                    message.getMessageType(),
+                    message.getModelName(),
+                    createdAt
+            );
+            conversationMessageMapper.insert(copy);
+        }
     }
 }
