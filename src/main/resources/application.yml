@@ -1,4 +1,4 @@
-﻿spring:
+spring:
   application:
     name: ykd
   config:
@@ -26,7 +26,16 @@
         voice-id: EXAVITQu4vr4xnSDxMaL
         male-voice-id: pNInz6obpgDQGcFmaJgB
         model: eleven_turbo_v2_5
+  datasource:
+    url: jdbc:sqlite:./work/sqlite/conversation.db
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
 
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/sqlite/schema.sql
 gaode:
   key: changeme
 web-search:
@@ -35,3 +44,6 @@ web-search:
   endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
   max-results: ${WEB_SEARCH_MAX_RESULTS:5}
   timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true

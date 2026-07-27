@@ -3,10 +3,6 @@
 # cp config/application-local.yml.example config/application-local.yml
 
 spring:
-  datasource:
-    url: jdbc:mysql://127.0.0.1:3306/ykd_bot?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
-    username: root
-    password: your-mysql-password
   ai:
     openai:
       api-key: sk-your-openai-api-key
