@@ -83,7 +83,7 @@ public class EmailTools {
         }
     }
 
-    @Tool(description = "查看最新邮件。获取收件箱中最近的邮件列表，包括发件人、主题和时间")
+    @Tool(description = "查看收件箱中最新的邮件列表，不做任何筛选。仅当用户想查看最近收到的邮件（不指定发件人、关键词）时调用。如果用户要查某人发的邮件或包含某关键词的邮件，应使用 searchEmails")
     public String readLatestEmails(
             @ToolParam(description = "要查看的邮件数量，默认5") int count) {
         String userId = userContext.getCurrentUserId();
@@ -129,10 +129,10 @@ public class EmailTools {
         }
     }
 
-    @Tool(description = "搜索邮件。按关键词或发件人搜索收件箱中的邮件")
+    @Tool(description = "按发件人或关键词搜索邮件。当用户提到要查某人发的邮件、搜索某个主题的邮件时，必须直接调用此工具，不要先调用 readLatestEmails")
     public String searchEmails(
-            @ToolParam(description = "搜索关键词（匹配主题和正文），没有则传null", required = false) String keyword,
-            @ToolParam(description = "发件人（邮箱地址或名字），没有则传null", required = false) String sender,
+            @ToolParam(description = "搜索关键词（匹配主题和正文），如果用户只按发件人搜索则传null", required = false) String keyword,
+            @ToolParam(description = "发件人的邮箱地址或名字。当用户说'查某人发的邮件'时，将人名填到这里", required = false) String sender,
             @ToolParam(description = "最多返回几条，默认5") int maxResults) {
         String userId = userContext.getCurrentUserId();
         if (userId == null) return "❌ 无法识别用户身份";
@@ -180,40 +180,47 @@ public class EmailTools {
         }
     }
 
-    @Tool(description = "查看某封邮件的完整正文内容。先调用 readLatestEmails 获取邮件列表，再使用此工具查看具体某一封邮件的全文。序号来自 readLatestEmails 返回的列表")
+    @Tool(description = "读取某封邮件的完整内容。先用 readLatestEmails 或 searchEmails 查看邮件列表，再用此工具按序号读取完整正文")
     public String readEmailDetail(
-            @ToolParam(description = "邮件序号，从1开始，如 1 表示第1封邮件") int index) {
+            @ToolParam(description = "邮件序号，从邮件列表中获取，最新的邮件序号为1") int index) {
         String userId = userContext.getCurrentUserId();
         if (userId == null) return "❌ 无法识别用户身份";
 
-        List<EmailService.EmailMessage> cached = lastFetchedCache.get(userId);
-        if (cached == null || cached.isEmpty()) {
-            return "⚠️ 请先调用 readLatestEmails 查看邮件列表";
+        EmailAccount account = emailAccountRepository.findByUserId(userId);
+        if (account == null) {
+            return "⚠️ 你还没有绑定邮箱，请先调用 bindEmail 绑定。";
         }
 
-        if (index < 1 || index > cached.size()) {
-            return "❌ 序号无效，当前共有 " + cached.size() + " 封邮件，请输入 1~" + cached.size();
+        if (index < 1) {
+            return "⚠️ 邮件序号无效，请输入大于0的序号";
         }
 
-        EmailService.EmailMessage msg = cached.get(index - 1);
-        log.info("[EmailTools] 查看邮件详情: userId={}, index={}, subject={}", userId, index, msg.subject());
+        log.info("[EmailTools] 读取邮件详情: userId={}, index={}", userId, index);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("📧 邮件详情\n");
-        sb.append("主题：").append(msg.subject()).append("\n");
-        sb.append("发件人：").append(msg.from()).append("\n");
-        if (msg.to() != null && !msg.to().isBlank()) {
+        try {
+            EmailService.EmailMessage msg = emailService.fetchByIndex(account, index);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("📧 邮件详情（第 ").append(index).append(" 封）：\n\n");
+            sb.append("主题：").append(msg.subject()).append("\n");
+            sb.append("发件人：").append(msg.from()).append("\n");
             sb.append("收件人：").append(msg.to()).append("\n");
-        }
-        sb.append("时间：").append(msg.date()).append("\n\n");
-        sb.append("--- 正文 ---\n");
-        sb.append(msg.body().isBlank() ? "(无正文内容)" : msg.body());
-        sb.append("\n--- 正文结束 ---");
+            sb.append("时间：").append(msg.date()).append("\n\n");
+            sb.append("--- 正文 ---\n");
+            sb.append(msg.body() != null ? msg.body() : "(无正文)");
+            sb.append("\n--- 正文结束 ---");
 
-        return sb.toString();
+            return sb.toString();
+
+        } catch (IllegalArgumentException e) {
+            return "⚠️ " + e.getMessage();
+        } catch (Exception e) {
+            log.error("[EmailTools] 读取邮件详情失败: {}", e.getMessage(), e);
+            return "❌ 读取邮件详情失败：" + e.getMessage();
+        }
     }
 
-        private String maskEmail(String email) {
+    private String maskEmail(String email) {
         int atIdx = email.indexOf("@");
         if (atIdx <= 2) return email;
         return email.substring(0, 2) + "***" + email.substring(atIdx);
