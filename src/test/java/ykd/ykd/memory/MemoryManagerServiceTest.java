@@ -24,7 +24,7 @@ class MemoryManagerServiceTest {
     @Test
     void shouldRestoreDatabaseHistoryOnlyOnce() {
         ConversationHistoryService historyService = mock(ConversationHistoryService.class);
-        when(historyService.findRecentMessages(USER_ID, 40)).thenReturn(List.of(
+        when(historyService.findAllMessages(USER_ID)).thenReturn(List.of(
                 message(1L, "user", "我叫小明", null),
                 message(2L, "assistant", "你好，小明", "DeepSeek")
         ));
@@ -44,13 +44,15 @@ class MemoryManagerServiceTest {
         assertThat(secondRead)
                 .extracting(Message::getText)
                 .containsExactly("我叫小明", "你好，小明");
-        verify(historyService, times(1)).findRecentMessages(USER_ID, 40);
+
+        verify(historyService, times(1))
+                .findAllMessages(USER_ID);
     }
 
     @Test
     void shouldPersistAndCacheNewConversationTurn() {
         ConversationHistoryService historyService = mock(ConversationHistoryService.class);
-        when(historyService.findRecentMessages(USER_ID, 40)).thenReturn(List.of());
+        when(historyService.findAllMessages(USER_ID)).thenReturn(List.of());
 
         MemoryManagerService manager = new MemoryManagerService(
                 newChatMemory(),
