@@ -85,7 +85,7 @@ public class MessageProcessor {
                             UserContext userContext,
                             Queue<ProcessResult> voiceQueue,
                             DocumentParsingService documentParsingService,
-                            IntervalReminderManager intervalReminderManager) {
+                            IntervalReminderManager intervalReminderManager,
                             LiepinResumeService liepinResumeService,
                             LiepinJobTaskManager liepinJobTaskManager) {
         this.llmService = llmService;
