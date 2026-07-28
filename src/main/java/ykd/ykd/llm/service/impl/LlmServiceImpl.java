@@ -10,6 +10,7 @@ import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
 import ykd.ykd.llm.tools.*;
+import ykd.ykd.job.tools.LiepinJobTools;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 
@@ -32,6 +33,7 @@ public class LlmServiceImpl implements LlmService {
     private final TranslateTools translateTools;
     private final EmailTools emailTools;
     private final DocumentTools documentTools;
+    private final LiepinJobTools liepinJobTools;
 
 
     @Override
@@ -71,7 +73,8 @@ public class LlmServiceImpl implements LlmService {
                             translateTools,
                             emailTools,
                             documentTools,
-                            webSearchTools
+                            webSearchTools,
+                            liepinJobTools
                     )
                     .call()
                     .chatResponse();
