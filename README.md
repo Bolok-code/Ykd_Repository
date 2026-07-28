@@ -249,3 +249,7 @@ Ykd_Repository/
 
 - [Git 与 GitHub 团队协作规范](doc/团队-Git-协作规范.md)
 - [项目技术文档](doc/technical-documentation.md)
+
+## 猎聘求职助手
+
+项目已支持简历解析、岗位搜索、DeepSeek 匹配、微信候选推送，以及用户明确确认后的单岗位沟通。首次使用和安全边界见 [猎聘求职助手说明](doc/猎聘求职助手.md)。

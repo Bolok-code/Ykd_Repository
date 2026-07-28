@@ -73,4 +73,27 @@ public interface ConversationMessageMapper {
             """)
     int deleteByUserId(@Param("userId") String userId);
 
+    /**
+     * 删除指定用户在某个ID之前的所有消息
+     */
+    @Delete("""
+            DELETE FROM conversation_message
+            WHERE user_id = #{userId} AND id < #{maxId}
+            """)
+    int deleteByUserIdBeforeId(
+            @Param("userId") String userId,
+            @Param("maxId") Long maxId
+    );
+
+    /**
+     * 查询指定用户的全部消息，按时间从旧到新排列。
+     */
+    @Select("""
+            SELECT id, user_id, role, content, message_type, model_name, created_at
+            FROM conversation_message
+            WHERE user_id = #{userId}
+            ORDER BY id ASC
+            """)
+    List<ConversationMessage> findAllByUserId(@Param("userId") String userId);
+
 }

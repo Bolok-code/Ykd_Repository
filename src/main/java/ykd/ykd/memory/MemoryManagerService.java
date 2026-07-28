@@ -27,7 +27,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class MemoryManagerService {
 
-    private static final int MAX_RESTORED_MESSAGES = 40;
     private static final int COMPRESS_THRESHOLD_TOKENS = 6000;
     private static final int KEEP_RECENT_TOKENS = 2500;
 
@@ -50,6 +49,7 @@ public class MemoryManagerService {
      */
     public List<Message> getHistory(String userId) {
         validateUserId(userId);
+
         hydrateFromDatabaseIfNeeded(userId);
         List<Message> history = chatMemory.get(userId);
         return history != null ? history : Collections.emptyList();
@@ -92,7 +92,7 @@ public class MemoryManagerService {
     }
 
     /**
-     * 只压缩当前运行时上下文，SQLite 中的原始消息不会被删除。
+     * 压缩当前运行时上下文，并同步到 SQLite。
      */
     public void compressIfNeeded(String userId, int promptTokens) {
         validateUserId(userId);
@@ -143,16 +143,38 @@ public class MemoryManagerService {
             return;
         }
 
+        List<ConversationMessage> recentConversationMessages = new ArrayList<>();
+        for (Message msg : recent) {
+            String role = (msg instanceof UserMessage) ? "user" :
+                          (msg instanceof AssistantMessage) ? "assistant" : "system";
+            recentConversationMessages.add(new ConversationMessage(
+                    null, userId, role, msg.getText(), "text", null, null
+            ));
+        }
+        conversationHistoryService.replaceHistory(
+                userId,
+                "[对话摘要] " + summary,
+                recentConversationMessages
+        );
+
         chatMemory.clear(userId);
         List<Message> replacement = new ArrayList<>();
         replacement.add(new AssistantMessage("[对话摘要] " + summary));
         replacement.addAll(recent);
         chatMemory.add(userId, replacement);
 
-        log.info("[MemoryManager] 压缩完成: userId={}, 摘要长度={}, 保留{}条≈{}token",
+        log.info("[MemoryManager] 压缩完成并已同步数据库: userId={}, 摘要长度={}, 保留{}条≈{}token",
                 userId, summary.length(), recent.size(), estimateTokens(recent));
     }
 
+    /**
+     * 从 SQLite 惰性恢复用户对话历史到内存中的 {@link ChatMemory}。
+     *
+     * <p>每个用户仅恢复一次（通过 {@code hydratedUsers} 集合记录），
+     * 后续调用直接跳过。采用双检锁 + 按用户粒度的锁，保证多线程安全。</p>
+     *
+     * @param userId 用户 ID
+     */
     private void hydrateFromDatabaseIfNeeded(String userId) {
         if (hydratedUsers.contains(userId)) {
             return;
@@ -160,13 +182,15 @@ public class MemoryManagerService {
 
         Object lock = hydrationLocks.computeIfAbsent(userId, ignored -> new Object());
         synchronized (lock) {
+            // 双检：进入同步块后再次确认，防止并发时重复恢复
             if (hydratedUsers.contains(userId)) {
                 return;
             }
 
             try {
+                // 从 SQLite 查出全部消息，转为 Spring AI Message 后批量写入 ChatMemory
                 List<Message> restoredMessages = conversationHistoryService
-                        .findRecentMessages(userId, MAX_RESTORED_MESSAGES)
+                        .findAllMessages(userId)
                         .stream()
                         .map(this::toSpringAiMessage)
                         .filter(message -> message != null)
@@ -184,6 +208,12 @@ public class MemoryManagerService {
         }
     }
 
+    /**
+     * 将 SQLite 中的 {@link ConversationMessage} 转换为 Spring AI 的 {@link Message} 对象。
+     *
+     * @param message SQLite 持久化消息，可为 {@code null}
+     * @return 对应的 Spring AI 消息对象，当原消息为空或角色无法识别时返回 {@code null}
+     */
     private Message toSpringAiMessage(ConversationMessage message) {
         if (message == null || message.getContent() == null) {
             return null;
@@ -214,6 +244,12 @@ public class MemoryManagerService {
         return chars / 3;
     }
 
+    /**
+     * 估算单条消息的 Token 数量。
+     *
+     * @param message 待估算的消息
+     * @return 估算的 Token 数，文本为空时返回 0
+     */
     private int estimateTokens(Message message) {
         String text = message.getText();
         return text != null ? text.length() / 3 : 0;

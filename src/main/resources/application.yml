@@ -44,6 +44,26 @@ web-search:
   endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
   max-results: ${WEB_SEARCH_MAX_RESULTS:5}
   timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
+liepin:
+  enabled: ${LIEPIN_ENABLED:false}
+  headless: ${LIEPIN_HEADLESS:false}
+  base-url: https://www.liepin.com
+  profile-directory: ./work/liepin/browser-profile
+  resume-directory: ./work/liepin/resumes
+  browser-executable-path: ${LIEPIN_BROWSER_EXECUTABLE:}
+  navigation-timeout-seconds: 45
+  max-search-results: 10
+  max-search-pages: 3
+  default-salary-code: ""
+  default-greeting: 请先在猎聘 App 中设置默认招呼语；程序确认岗位后只点击“聊一聊”，不会额外重复发送文本。
+  auto-apply:
+    enabled: ${LIEPIN_AUTO_APPLY_ENABLED:false}
+    scan-interval-ms: ${LIEPIN_AUTO_SCAN_INTERVAL_MS:60000}
+    default-daily-limit: ${LIEPIN_AUTO_DAILY_LIMIT:3}
+    max-daily-limit: ${LIEPIN_AUTO_MAX_DAILY_LIMIT:20}
+    default-min-match-score: ${LIEPIN_AUTO_MIN_MATCH_SCORE:85}
+    default-interval-minutes: ${LIEPIN_AUTO_INTERVAL_MINUTES:30}
+    max-consecutive-failures: ${LIEPIN_AUTO_MAX_FAILURES:3}
 mybatis:
   configuration:
     map-underscore-to-camel-case: true

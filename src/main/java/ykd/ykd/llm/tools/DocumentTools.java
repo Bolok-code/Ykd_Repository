@@ -56,9 +56,20 @@ public class DocumentTools {
         return doc != null ? doc.fileName() : null;
     }
 
+    public static byte[] getCachedBytes(String userId) {
+        ParsedDocument doc = userDocumentCache.get(userId);
+        return doc == null || doc.bytes() == null ? null : doc.bytes().clone();
+    }
+
     public static void cacheDocument(String userId, String fileName, String content) {
-        userDocumentCache.put(userId, new ParsedDocument(fileName, content));
-        log.info("[DocumentTools] 文档已缓存: userId={}, fileName={}, length={}", userId, fileName, content.length());
+        cacheDocument(userId, fileName, content, null);
+    }
+
+    public static void cacheDocument(String userId, String fileName, String content, byte[] bytes) {
+        byte[] safeBytes = bytes == null ? null : bytes.clone();
+        userDocumentCache.put(userId, new ParsedDocument(fileName, content, safeBytes));
+        log.info("[DocumentTools] 文档已缓存: userId={}, fileName={}, length={}, originalBytes={}",
+                userId, fileName, content.length(), safeBytes == null ? 0 : safeBytes.length);
     }
 
     public static void clearCachedDocument(String userId) {
@@ -92,7 +103,7 @@ public class DocumentTools {
                         return "⚠️ 文件内容为空或无法提取文字（可能是扫描版PDF/图片型文档）";
                     }
 
-                    cacheDocument(userId, fileName, result.text());
+                    cacheDocument(userId, fileName, result.text(), fileBytes);
                     return fileName;
 
                 } catch (Exception e) {
@@ -152,7 +163,7 @@ public class DocumentTools {
                 return "⚠️ 文件内容为空或无法提取文字（可能是扫描版PDF/图片型文档）";
             }
 
-            cacheDocument(userId, fileName, result.text());
+            cacheDocument(userId, fileName, result.text(), Files.readAllBytes(tempFile));
 
             return buildResponse(result, question, fileName);
 
@@ -245,6 +256,6 @@ public class DocumentTools {
     private record FileContext(WeixinMessage msg, ILinkClient client) {
     }
 
-    private record ParsedDocument(String fileName, String content) {
+    private record ParsedDocument(String fileName, String content, byte[] bytes) {
     }
 }

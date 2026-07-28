@@ -59,7 +59,8 @@ ilink-creds.json.sync
 *.pcm
 
 ### 运行时数据 ###
-work/
+work/conversation.db
+work/ilink-session.json
 config/application-local.yml
 
 /ykd/

@@ -19,3 +19,17 @@ web-search:
   endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
   max-results: ${WEB_SEARCH_MAX_RESULTS:5}
   timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
+
+liepin:
+  enabled: false
+  headless: false
+  profile-directory: ./work/liepin/browser-profile
+  resume-directory: ./work/liepin/resumes
+  auto-apply:
+    enabled: false
+    scan-interval-ms: 60000
+    default-daily-limit: 3
+    max-daily-limit: 20
+    default-min-match-score: 85
+    default-interval-minutes: 30
+    max-consecutive-failures: 3
