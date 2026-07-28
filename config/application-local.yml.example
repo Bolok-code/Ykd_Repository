@@ -19,3 +19,7 @@ web-search:
   endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
   max-results: ${WEB_SEARCH_MAX_RESULTS:5}
   timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
+
+liepin:
+  enabled: false
+  headless: false

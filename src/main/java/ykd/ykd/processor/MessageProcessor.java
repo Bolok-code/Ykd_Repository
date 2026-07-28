@@ -7,6 +7,8 @@ import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import ykd.ykd.document.DocumentParsingService;
+import ykd.ykd.job.service.LiepinResumeService;
+import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.llm.tools.DocumentTools;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
@@ -63,9 +65,12 @@ public class MessageProcessor {
     private final ImageBatchManager imageBatchManager;
     private final UserContext userContext;
     private final DocumentParsingService documentParsingService;
+    private final LiepinResumeService liepinResumeService;
+    private final LiepinJobTaskManager liepinJobTaskManager;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedReminders = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
+    private final Queue<ProcessResult> completedLiepinTasks = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> voiceQueue;
 
     public MessageProcessor(LlmService llmService,
@@ -76,7 +81,9 @@ public class MessageProcessor {
                             ImageBatchManager imageBatchManager,
                             UserContext userContext,
                             Queue<ProcessResult> voiceQueue,
-                            DocumentParsingService documentParsingService) {
+                            DocumentParsingService documentParsingService,
+                            LiepinResumeService liepinResumeService,
+                            LiepinJobTaskManager liepinJobTaskManager) {
         this.llmService = llmService;
         this.deepseekClient = deepseekClient;
         this.agnesClient = agnesClient;
@@ -86,6 +93,8 @@ public class MessageProcessor {
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
         this.documentParsingService = documentParsingService;
+        this.liepinResumeService = liepinResumeService;
+        this.liepinJobTaskManager = liepinJobTaskManager;
     }
 
     /**
@@ -96,6 +105,7 @@ public class MessageProcessor {
         videoTaskManager.setOnCompleted(completedVideos::add);
         reminderTaskManager.setOnCompleted(completedReminders::add);
         imageBatchManager.setOnBatchReady(this::processImageBatch);
+        liepinJobTaskManager.setOnCompleted(completedLiepinTasks::add);
     }
 
     /**
@@ -121,6 +131,10 @@ public class MessageProcessor {
      */
     public ProcessResult pollCompletedImageBatch() {
         return completedImageBatches.poll();
+    }
+
+    public ProcessResult pollCompletedLiepinTask() {
+        return completedLiepinTasks.poll();
     }
 
     /**
@@ -155,12 +169,17 @@ public class MessageProcessor {
                     }
 
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
+                    boolean resumeSaved = liepinResumeService.looksLikeResume(fileName, cachedContent);
+                    if (resumeSaved) {
+                        liepinResumeService.save(fromUserId, fileName, cachedContent);
+                    }
                     String prompt = String.format(
                             "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结。",
                             fileName, cachedContent);
                     String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
-                    result[0] = reply;
-                    DocumentTools.clearCachedDocument(fromUserId);
+                    result[0] = resumeSaved
+                            ? reply + "\n\n已识别为简历并保存，可继续让我在猎聘搜索岗位。"
+                            : reply;
                 } catch (Exception e) {
                     log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
                     result[0] = "❌ 文件处理失败，请稍后重试";

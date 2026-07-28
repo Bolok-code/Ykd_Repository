@@ -247,6 +247,15 @@ public class WeixinBotService {
         }
     }
 
+
+    private void sendCompletedLiepinTask() {
+        ProcessResult result = messageProcessor.pollCompletedLiepinTask();
+        while (result != null) {
+            log.info("[Bot] 推送猎聘求职任务结果: userId={}", result.userId());
+            safeSendText(result.userId(), result.text());
+            result = messageProcessor.pollCompletedLiepinTask();
+        }
+    }
     private void sendCompletedVideo() {
         ProcessResult result = messageProcessor.pollCompletedVideo();
         while (result != null) {
@@ -338,6 +347,7 @@ public class WeixinBotService {
                         sendCompletedVideo();
                         sendCompletedReminder();
                         sendCompletedImageBatch();
+                        sendCompletedLiepinTask();
 
                     } catch (SessionExpiredException e) {
                         log.warn("轮询异常-会话过期: {}", e.getMessage());

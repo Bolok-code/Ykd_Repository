@@ -44,6 +44,19 @@ web-search:
   endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
   max-results: ${WEB_SEARCH_MAX_RESULTS:5}
   timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
+liepin:
+  enabled: ${LIEPIN_ENABLED:false}
+  headless: ${LIEPIN_HEADLESS:false}
+  base-url: https://www.liepin.com
+  profile-directory: ./work/liepin/browser-profile
+  browser-executable-path: ${LIEPIN_BROWSER_EXECUTABLE:}
+  navigation-timeout-seconds: 45
+  max-search-results: 10
+  max-search-pages: 3
+  max-applications-per-task: 1
+  require-confirmation: true
+  default-salary-code: ""
+  default-greeting: 请先在猎聘 App 中设置默认招呼语；程序确认岗位后只点击“聊一聊”，不会额外重复发送文本。
 mybatis:
   configuration:
     map-underscore-to-camel-case: true
