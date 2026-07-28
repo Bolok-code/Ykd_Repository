@@ -11,7 +11,10 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import ykd.ykd.job.config.LiepinProperties;
 import ykd.ykd.job.model.LiepinApplicationResult;
+import ykd.ykd.job.model.LiepinApplicationStatus;
 import ykd.ykd.job.model.LiepinJobPosting;
+import ykd.ykd.job.model.LiepinResume;
+import ykd.ykd.job.model.ResumeDeliveryMode;
 import ykd.ykd.job.model.LiepinSearchRequest;
 
 import java.net.URLEncoder;
@@ -27,9 +30,13 @@ import java.util.regex.Pattern;
 /**
  * 猎聘浏览器网关。
  *
- * <p>实现思路参考 get_jobs 的猎聘适配：持久化浏览器会话、监听职位搜索接口、
- * 解析 job/comp/recruiter 数据，并在用户确认后点击“聊一聊”。本类为项目内的
- * 独立实现，不包含规避风控、验证码绕过或浏览器指纹伪装。</p>
+ * <p>核心页面操作改编自 GET JOBS 的猎聘适配，包括监听职位搜索接口、遍历职位卡片、
+ * 悬停招聘者区域、点击“聊一聊”和关闭聊天窗口。原项目：
+ * https://github.com/loks666/get_jobs ，Copyright (c) 2024 GET JOBS，
+ * 按 GETJOBS-NC-1.0 仅用于非商业学习。</p>
+ *
+ * <p>本类在其基础上适配当前项目的 Spring Boot、微信确认、MyBatis/SQLite
+ * 和后台任务结构，不包含验证码绕过或浏览器指纹伪装。</p>
  */
 @Slf4j
 @Lazy
@@ -40,9 +47,10 @@ public class PlaywrightLiepinAutomationGateway implements LiepinAutomationGatewa
     private static final Set<String> OUTSOURCE_WORDS = Set.of("外包", "人力资源", "劳务派遣", "驻场", "服务外包");
     private static final Map<String, String> CITY_CODES = Map.ofEntries(
             Map.entry("全国", "410"), Map.entry("北京", "010"), Map.entry("上海", "020"),
+            Map.entry("天津", "030"), Map.entry("重庆", "040"),
             Map.entry("广州", "050020"), Map.entry("深圳", "050090"), Map.entry("杭州", "070020"),
             Map.entry("成都", "280020"), Map.entry("南京", "060020"), Map.entry("武汉", "170020"),
-            Map.entry("苏州", "060080"), Map.entry("西安", "270020")
+            Map.entry("苏州", "060080"), Map.entry("西安", "270020"), Map.entry("大连", "210040")
     );
 
     private final LiepinProperties properties;
@@ -140,25 +148,356 @@ public class PlaywrightLiepinAutomationGateway implements LiepinAutomationGatewa
             return LiepinApplicationResult.needsUserAction("猎聘登录已失效，请重新扫码登录后再确认岗位");
         }
         Page current = page();
-        current.navigate(posting.getJobUrl(), new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-        current.waitForTimeout(1000);
-        ensureNoVerification(current);
-
-        Locator chatButton = current.locator(LiepinLocators.CHAT_BUTTON).first();
-        if (!visible(chatButton)) {
-            return LiepinApplicationResult.needsUserAction("未找到“聊一聊”按钮，岗位可能已关闭或页面结构已变化，请在电脑浏览器中检查");
+        LiepinApplicationResult detailResult = tryApplyFromDetail(current, posting);
+        if (detailResult != null && detailResult.success()) {
+            return detailResult;
         }
-        chatButton.click();
+
+        // GET JOBS 的猎聘实现是在搜索结果卡片内悬停招聘者区域后点击“聊一聊”。
+        // 详情页没有按钮时回落到相同策略，兼容猎聘不同页面版本。
+        LiepinApplicationResult cardResult = tryApplyFromSearchCard(current, posting);
+        if (cardResult != null) {
+            return cardResult;
+        }
+        if (detailResult != null) {
+            return detailResult;
+        }
+        return LiepinApplicationResult.needsUserAction(
+                "没有找到对应职位的“聊一聊”按钮，岗位可能已关闭或猎聘页面结构已变化，请在电脑浏览器中检查");
+    }
+
+    @Override
+    public synchronized LiepinApplicationResult applyAndSendResume(
+            LiepinJobPosting posting,
+            LiepinResume resume,
+            ResumeDeliveryMode mode,
+            String greeting) {
+        requireEnabled();
+        if (!isLoggedIn()) {
+            return LiepinApplicationResult.needsUserAction(
+                    LiepinApplicationStatus.LOGIN_EXPIRED,
+                    "猎聘登录已失效，自动投递计划已暂停；请在电脑完成登录，系统会自动恢复");
+        }
+        if (resume == null) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.RESUME_NOT_FOUND, "没有找到当前求职简历");
+        }
+        Page current = page();
+        try {
+            LiepinApplicationResult openResult = openChatForResume(current, posting);
+            if (openResult != null) return openResult;
+            return switch (mode) {
+                case ONLINE -> sendOnlineResume(current, posting);
+                case ATTACHMENT -> sendAttachmentResume(current, posting, resume);
+                case AUTO -> {
+                    LiepinApplicationResult online = sendOnlineResume(current, posting);
+                    if (online.success() || online.status().pausesCampaign()) yield online;
+                    if (online.status() != LiepinApplicationStatus.RESUME_BUTTON_NOT_FOUND) yield online;
+                    yield sendAttachmentResume(current, posting, resume);
+                }
+            };
+        } catch (LiepinLoginRequiredException e) {
+            return LiepinApplicationResult.needsUserAction(
+                    LiepinApplicationStatus.CAPTCHA_REQUIRED, e.getMessage());
+        } catch (Exception e) {
+            log.warn("[LiepinJob] 自动发送简历失败: jobId={}, mode={}, error={}",
+                    posting.getExternalJobId(), mode, e.getMessage());
+            return LiepinApplicationResult.failed("发送简历失败：" + defaultIfBlank(e.getMessage(), "未知错误"));
+        }
+    }
+
+    private LiepinApplicationResult openChatForResume(Page current, LiepinJobPosting posting) {
+        if (posting.getJobUrl() != null && !posting.getJobUrl().isBlank()) {
+            current.navigate(posting.getJobUrl(),
+                    new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            current.waitForTimeout(800);
+            ensureNoVerification(current);
+            Locator button = firstVisible(
+                    current.locator(LiepinLocators.CONTINUE_CHAT_BUTTON).first(),
+                    current.locator(LiepinLocators.CHAT_BUTTON).first());
+            if (button != null && openChatWindow(current, button)) return null;
+        }
+
+        LiepinSearchRequest fallbackRequest = new LiepinSearchRequest(
+                posting.getJobName(), searchCityForPosting(posting.getCity()), null, null,
+                false, Math.max(20, properties.getMaxSearchResults()));
+        current.navigate(searchUrl(fallbackRequest, 0),
+                new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+        closeSubscriptionPopup(current);
+        waitForJobCards(current);
         current.waitForTimeout(800);
-        if (!visible(current.locator(LiepinLocators.CHAT_HEADER).first())) {
-            return LiepinApplicationResult.needsUserAction("已点击“聊一聊”，但没有检测到沟通窗口；请在电脑浏览器中确认是否需要额外验证");
+        ensureNoVerification(current);
+        Locator card = findMatchingJobCard(current, posting);
+        if (card == null) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.JOB_EXPIRED, "岗位已关闭或搜索结果中已找不到该岗位");
+        }
+        scrollAndHoverRecruiter(current, card);
+        Locator button = firstVisible(
+                card.locator(LiepinLocators.CONTINUE_CHAT_BUTTON).first(),
+                card.locator(LiepinLocators.CHAT_BUTTON).first());
+        if (button == null || !openChatWindow(current, button)) {
+            return LiepinApplicationResult.needsUserAction(
+                    LiepinApplicationStatus.RESUME_BUTTON_NOT_FOUND,
+                    "已找到岗位，但无法打开沟通窗口；猎聘页面结构可能已变化");
+        }
+        return null;
+    }
+
+    private boolean openChatWindow(Page current, Locator button) {
+        button.scrollIntoViewIfNeeded();
+        button.click();
+        try {
+            current.locator(LiepinLocators.CHAT_HEADER).first().waitFor(
+                    new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(5000));
+            return true;
+        } catch (PlaywrightException e) {
+            ensureNoVerification(current);
+            return false;
+        }
+    }
+
+    private LiepinApplicationResult sendOnlineResume(Page current, LiepinJobPosting posting) {
+        String before = safeBodyText(current);
+        if (before.contains("简历已发送") || before.contains("已投递简历")) {
+            closeChatWindow(current);
+            return LiepinApplicationResult.alreadySent("该岗位已发送过简历，本次已跳过去重");
+        }
+        Locator sendButton = current.locator(LiepinLocators.SEND_RESUME_BUTTON).first();
+        if (!visible(sendButton)) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.RESUME_BUTTON_NOT_FOUND, "沟通窗口中没有找到发送简历入口");
+        }
+        sendButton.click();
+        current.waitForTimeout(300);
+        Locator online = current.locator(LiepinLocators.ONLINE_RESUME_OPTION).first();
+        if (visible(online)) online.click();
+        current.waitForTimeout(200);
+        Locator confirm = current.locator(LiepinLocators.ONLINE_RESUME_CONFIRM).first();
+        if (visible(confirm)) confirm.click();
+        current.waitForTimeout(800);
+        ensureNoVerification(current);
+        closeChatWindow(current);
+        return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - "
+                + posting.getJobName() + "”发送猎聘在线简历");
+    }
+
+    private LiepinApplicationResult sendAttachmentResume(Page current,
+                                                          LiepinJobPosting posting,
+                                                          LiepinResume resume) {
+        if (resume.getFilePath() == null || resume.getFilePath().isBlank()) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.RESUME_NOT_FOUND, "当前简历没有保留PDF或Word原文件");
+        }
+        Path attachment = Path.of(resume.getFilePath()).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(attachment)) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.RESUME_NOT_FOUND, "简历附件文件不存在，请重新发送并保存简历");
+        }
+        String fileType = defaultIfBlank(resume.getFileType(), "").toLowerCase(Locale.ROOT);
+        if (!Set.of("pdf", "doc", "docx").contains(fileType)) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.UPLOAD_NOT_SUPPORTED, "猎聘附件简历仅支持PDF、DOC或DOCX");
         }
 
+        Locator resumeButton = current.locator(LiepinLocators.SEND_RESUME_BUTTON).first();
+        if (visible(resumeButton)) {
+            resumeButton.click();
+            current.waitForTimeout(300);
+        }
+        Locator attachmentButton = current.locator(LiepinLocators.ATTACHMENT_BUTTON).first();
+        if (visible(attachmentButton)) {
+            attachmentButton.click();
+            current.waitForTimeout(300);
+        }
+        Locator input = current.locator(LiepinLocators.ATTACHMENT_FILE_INPUT).first();
+        if (input.count() == 0) {
+            return LiepinApplicationResult.failed(
+                    LiepinApplicationStatus.UPLOAD_NOT_SUPPORTED,
+                    "当前猎聘沟通窗口没有附件上传入口，请改用在线简历模式");
+        }
+        input.setInputFiles(attachment);
+        current.waitForTimeout(600);
+        Locator send = current.locator(LiepinLocators.ATTACHMENT_SEND_BUTTON).first();
+        if (visible(send)) send.click();
+        current.waitForTimeout(800);
+        ensureNoVerification(current);
+        closeChatWindow(current);
+        return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - "
+                + posting.getJobName() + "”发送附件简历“" + resume.getFileName() + "”");
+    }
+
+    private Locator firstVisible(Locator... locators) {
+        for (Locator locator : locators) {
+            if (visible(locator)) return locator;
+        }
+        return null;
+    }
+
+    private String safeBodyText(Page current) {
+        try {
+            return defaultIfBlank(current.locator("body").innerText(), "");
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+    private LiepinApplicationResult tryApplyFromDetail(Page current, LiepinJobPosting posting) {
+        if (posting.getJobUrl() == null || posting.getJobUrl().isBlank()) return null;
+        try {
+            current.navigate(posting.getJobUrl(),
+                    new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            current.waitForTimeout(800);
+            ensureNoVerification(current);
+
+            if (visible(current.locator(LiepinLocators.CONTINUE_CHAT_BUTTON).first())) {
+                return alreadyContacted(posting);
+            }
+            Locator chatButton = current.locator(LiepinLocators.CHAT_BUTTON).first();
+            if (!visible(chatButton)) {
+                return LiepinApplicationResult.needsUserAction("岗位详情页没有“聊一聊”按钮，将尝试从搜索列表发起沟通");
+            }
+            return clickChatAndVerify(current, chatButton, posting);
+        } catch (LiepinLoginRequiredException e) {
+            throw e;
+        } catch (Exception e) {
+            log.debug("[LiepinJob] 详情页沟通失败，将回落搜索列表: jobId={}, error={}",
+                    posting.getExternalJobId(), e.getMessage());
+            return null;
+        }
+    }
+
+    private LiepinApplicationResult tryApplyFromSearchCard(Page current, LiepinJobPosting posting) {
+        try {
+            LiepinSearchRequest fallbackRequest = new LiepinSearchRequest(
+                    posting.getJobName(),
+                    searchCityForPosting(posting.getCity()),
+                    null,
+                    null,
+                    false,
+                    Math.max(20, properties.getMaxSearchResults()));
+            current.navigate(searchUrl(fallbackRequest, 0),
+                    new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+            closeSubscriptionPopup(current);
+            waitForJobCards(current);
+            current.waitForTimeout(800);
+            ensureNoVerification(current);
+
+            Locator card = findMatchingJobCard(current, posting);
+            if (card == null) {
+                return LiepinApplicationResult.needsUserAction(
+                        "详情页和搜索列表都没有找到该岗位，请重新搜索后再确认");
+            }
+            scrollAndHoverRecruiter(current, card);
+
+            Locator continueButton = card.locator(LiepinLocators.CONTINUE_CHAT_BUTTON).first();
+            if (visible(continueButton)) {
+                return alreadyContacted(posting);
+            }
+            Locator chatButton = card.locator(LiepinLocators.CHAT_BUTTON).first();
+            if (!visible(chatButton)) {
+                return LiepinApplicationResult.needsUserAction(
+                        "已找到岗位卡片，但没有显示“聊一聊”按钮，请在电脑浏览器中确认页面状态");
+            }
+            return clickChatAndVerify(current, chatButton, posting);
+        } catch (LiepinLoginRequiredException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("[LiepinJob] 搜索列表沟通失败: jobId={}, error={}",
+                    posting.getExternalJobId(), e.getMessage());
+            return LiepinApplicationResult.needsUserAction(
+                    "猎聘页面操作失败，请在电脑浏览器中检查后重试：" + defaultIfBlank(e.getMessage(), "未知错误"));
+        }
+    }
+
+    private Locator findMatchingJobCard(Page current, LiepinJobPosting posting) {
+        Locator cards = current.locator(LiepinLocators.JOB_CARDS);
+        int count = cards.count();
+        for (int i = 0; i < count; i++) {
+            Locator card = cards.nth(i);
+            if (cardMatches(card, posting)) return card;
+        }
+        return null;
+    }
+
+    private boolean cardMatches(Locator card, LiepinJobPosting posting) {
+        try {
+            String cardText = defaultIfBlank(card.innerText(), "");
+            String externalId = defaultIfBlank(posting.getExternalJobId(), "");
+            if (!externalId.isBlank()) {
+                String ext = defaultIfBlank(card.getAttribute("data-tlg-ext"), "");
+                String scm = defaultIfBlank(card.getAttribute("data-tlg-scm"), "");
+                Object hrefValue = card.locator("a[href]").evaluateAll(
+                        "(elements) => elements.map(element => element.href || '').join(' ')");
+                String hrefs = hrefValue == null ? "" : hrefValue.toString();
+                if (ext.contains(externalId) || scm.contains(externalId) || hrefs.contains(externalId)) {
+                    return true;
+                }
+            }
+            boolean sameJob = !defaultIfBlank(posting.getJobName(), "").isBlank()
+                    && cardText.contains(posting.getJobName());
+            boolean sameCompany = defaultIfBlank(posting.getCompanyName(), "").isBlank()
+                    || cardText.contains(posting.getCompanyName());
+            return sameJob && sameCompany;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void scrollAndHoverRecruiter(Page current, Locator card) {
+        card.scrollIntoViewIfNeeded();
+        current.waitForTimeout(200);
+        Locator recruiterArea = card.locator(LiepinLocators.RECRUITER_AREA).first();
+        Locator target = visible(recruiterArea) ? recruiterArea : card;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                target.hover(new Locator.HoverOptions().setTimeout(5000));
+                current.waitForTimeout(300);
+                return;
+            } catch (PlaywrightException e) {
+                log.debug("[LiepinJob] 第 {} 次招聘者区域悬停失败: {}", attempt, e.getMessage());
+                if (attempt < 3) {
+                    card.scrollIntoViewIfNeeded();
+                    current.waitForTimeout(300);
+                }
+            }
+        }
+    }
+
+    private LiepinApplicationResult clickChatAndVerify(Page current,
+                                                       Locator chatButton,
+                                                       LiepinJobPosting posting) {
+        chatButton.scrollIntoViewIfNeeded();
+        chatButton.click();
+        try {
+            current.locator(LiepinLocators.CHAT_HEADER).first().waitFor(
+                    new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(3000));
+        } catch (PlaywrightException ignored) {
+            ensureNoVerification(current);
+            return LiepinApplicationResult.needsUserAction(
+                    "已点击“聊一聊”，但没有检测到沟通窗口；请确认是否出现登录或安全验证");
+        }
         closeChatWindow(current);
         return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - " + posting.getJobName()
                 + "”发起沟通；招呼语由猎聘 App 中预先配置的默认招呼语发送");
     }
 
+    private String searchCityForPosting(String city) {
+        String candidate = defaultIfBlank(city, "全国").strip();
+        try {
+            cityCode(candidate);
+            return candidate;
+        } catch (IllegalArgumentException ignored) {
+            for (String knownCity : CITY_CODES.keySet()) {
+                if (candidate.contains(knownCity)) return knownCity;
+            }
+            log.debug("[LiepinJob] 岗位地区“{}”无法直接映射城市代码，回落全国搜索", candidate);
+            return "全国";
+        }
+    }
+    private LiepinApplicationResult alreadyContacted(LiepinJobPosting posting) {
+        return LiepinApplicationResult.success("“" + posting.getCompanyName() + " - " + posting.getJobName()
+                + "”显示为“继续聊”，说明此前已经发起过沟通，本次没有重复发送");
+    }
     @PreDestroy
     public synchronized void close() {
         try {
@@ -420,7 +759,7 @@ public class PlaywrightLiepinAutomationGateway implements LiepinAutomationGatewa
         if (trimmed.matches("\\d{3,6}")) return trimmed;
         String code = CITY_CODES.get(trimmed);
         if (code == null) {
-            throw new IllegalArgumentException("暂不支持城市“" + city + "”，可直接传猎聘城市代码，或使用全国、北京、上海、广州、深圳、杭州、成都、南京、武汉、苏州、西安");
+            throw new IllegalArgumentException("暂不支持城市“" + city + "”，可直接传猎聘城市代码，或使用全国、北京、上海、天津、重庆、广州、深圳、杭州、大连、成都、南京、武汉、苏州、西安");
         }
         return code;
     }

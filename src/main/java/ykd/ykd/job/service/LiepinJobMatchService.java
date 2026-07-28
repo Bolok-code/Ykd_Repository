@@ -28,7 +28,7 @@ public class LiepinJobMatchService {
         this.properties = properties;
     }
 
-    public void enrich(String resumeContent, LiepinJobPosting posting) {
+    public boolean enrich(String resumeContent, LiepinJobPosting posting) {
         try {
             String prompt = """
                     简历：
@@ -48,11 +48,13 @@ public class LiepinJobMatchService {
             posting.setMatchScore(Math.max(0, Math.min(100, json.path("score").asInt(60))));
             posting.setMatchReason(json.path("reason").asText("岗位与简历存在一定匹配度"));
             posting.setGreeting(json.path("greeting").asText(properties.getDefaultGreeting()));
+            return true;
         } catch (Exception e) {
             log.warn("[LiepinJob] AI 匹配失败，使用降级评分: job={}, error={}", posting.getJobName(), e.getMessage());
             posting.setMatchScore(60);
             posting.setMatchReason("AI 匹配暂时不可用，请人工查看岗位描述");
             posting.setGreeting(properties.getDefaultGreeting());
+                    return false;
         }
     }
 

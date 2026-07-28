@@ -12,6 +12,10 @@ class PlaywrightLiepinAutomationGatewayTest {
     void mapsSupportedCityNames() {
         assertEquals("070020", PlaywrightLiepinAutomationGateway.cityCode("杭州市"));
         assertEquals("020", PlaywrightLiepinAutomationGateway.cityCode("上海"));
+        assertEquals("030", PlaywrightLiepinAutomationGateway.cityCode("天津市"));
+        assertEquals("040", PlaywrightLiepinAutomationGateway.cityCode("重庆"));
+        assertEquals("210040", PlaywrightLiepinAutomationGateway.cityCode("大连市"));
+        assertEquals("060110", PlaywrightLiepinAutomationGateway.cityCode("060110"));
     }
 
     @Test

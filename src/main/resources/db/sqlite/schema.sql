@@ -64,3 +64,76 @@ CREATE TABLE IF NOT EXISTS liepin_job_posting (
 
 CREATE INDEX IF NOT EXISTS idx_liepin_job_posting_task_id_score
     ON liepin_job_posting (task_id, match_score DESC, id ASC);
+CREATE TABLE IF NOT EXISTS liepin_resume_asset (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL UNIQUE,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    file_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_liepin_resume_asset_file_hash
+    ON liepin_resume_asset (user_id, file_hash);
+
+CREATE TABLE IF NOT EXISTS liepin_job_campaign (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    resume_id INTEGER,
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('ONLINE', 'ATTACHMENT', 'AUTO')),
+    keyword TEXT NOT NULL,
+    city TEXT NOT NULL,
+    min_salary_k INTEGER,
+    max_salary_k INTEGER,
+    min_match_score INTEGER NOT NULL DEFAULT 85,
+    exclude_outsourcing INTEGER NOT NULL DEFAULT 1,
+    excluded_keywords TEXT,
+    daily_limit INTEGER NOT NULL DEFAULT 3,
+    interval_minutes INTEGER NOT NULL DEFAULT 30,
+    status TEXT NOT NULL,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    last_run_at TEXT,
+    next_run_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (resume_id) REFERENCES liepin_resume(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_liepin_job_campaign_due
+    ON liepin_job_campaign (status, next_run_at);
+
+CREATE INDEX IF NOT EXISTS idx_liepin_job_campaign_user_id
+    ON liepin_job_campaign (user_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS liepin_application_record (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    campaign_id INTEGER,
+    task_id INTEGER,
+    posting_id INTEGER,
+    external_job_key TEXT NOT NULL,
+    job_name TEXT NOT NULL,
+    company_name TEXT,
+    resume_id INTEGER,
+    delivery_mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    failure_reason TEXT,
+    contacted_at TEXT,
+    resume_sent_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (campaign_id) REFERENCES liepin_job_campaign(id),
+    FOREIGN KEY (task_id) REFERENCES liepin_job_task(id),
+    FOREIGN KEY (posting_id) REFERENCES liepin_job_posting(id),
+    FOREIGN KEY (resume_id) REFERENCES liepin_resume(id),
+    UNIQUE (user_id, external_job_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_liepin_application_record_user_status
+    ON liepin_application_record (user_id, status, id DESC);
