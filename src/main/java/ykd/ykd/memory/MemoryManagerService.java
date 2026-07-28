@@ -27,7 +27,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class MemoryManagerService {
 
-    private static final int MAX_RESTORED_MESSAGES = 40;
     private static final int COMPRESS_THRESHOLD_TOKENS = 6000;
     private static final int KEEP_RECENT_TOKENS = 2500;
 
@@ -92,7 +91,7 @@ public class MemoryManagerService {
     }
 
     /**
-     * 只压缩当前运行时上下文，SQLite 中的原始消息不会被删除。
+     * 压缩当前运行时上下文，并同步到 SQLite。
      */
     public void compressIfNeeded(String userId, int promptTokens) {
         validateUserId(userId);
@@ -149,7 +148,21 @@ public class MemoryManagerService {
         replacement.addAll(recent);
         chatMemory.add(userId, replacement);
 
-        log.info("[MemoryManager] 压缩完成: userId={}, 摘要长度={}, 保留{}条≈{}token",
+        List<ConversationMessage> recentConversationMessages = new ArrayList<>();
+        for (Message msg : recent) {
+            String role = (msg instanceof UserMessage) ? "user" :
+                          (msg instanceof AssistantMessage) ? "assistant" : "system";
+            recentConversationMessages.add(new ConversationMessage(
+                    null, userId, role, msg.getText(), "text", null, null
+            ));
+        }
+        conversationHistoryService.replaceHistory(
+                userId,
+                "[对话摘要] " + summary,
+                recentConversationMessages
+        );
+
+        log.info("[MemoryManager] 压缩完成并已同步数据库: userId={}, 摘要长度={}, 保留{}条≈{}token",
                 userId, summary.length(), recent.size(), estimateTokens(recent));
     }
 
@@ -166,7 +179,7 @@ public class MemoryManagerService {
 
             try {
                 List<Message> restoredMessages = conversationHistoryService
-                        .findRecentMessages(userId, MAX_RESTORED_MESSAGES)
+                        .findAllMessages(userId)
                         .stream()
                         .map(this::toSpringAiMessage)
                         .filter(message -> message != null)
