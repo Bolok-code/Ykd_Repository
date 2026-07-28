@@ -17,6 +17,7 @@ import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.exception.GlobalExceptionHandler;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.task.ImageBatchManager;
+import ykd.ykd.task.IntervalReminderManager;
 import ykd.ykd.task.ReminderTaskManager;
 import ykd.ykd.task.VideoTaskManager;
 
@@ -70,8 +71,10 @@ public class MessageProcessor {
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedReminders = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
+    private final Queue<ProcessResult> completedIntervalReminders = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedLiepinTasks = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> voiceQueue;
+    private final IntervalReminderManager intervalReminderManager;
 
     public MessageProcessor(LlmService llmService,
                             ChatClient deepseekClient,
@@ -82,6 +85,7 @@ public class MessageProcessor {
                             UserContext userContext,
                             Queue<ProcessResult> voiceQueue,
                             DocumentParsingService documentParsingService,
+                            IntervalReminderManager intervalReminderManager) {
                             LiepinResumeService liepinResumeService,
                             LiepinJobTaskManager liepinJobTaskManager) {
         this.llmService = llmService;
@@ -93,6 +97,7 @@ public class MessageProcessor {
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
         this.documentParsingService = documentParsingService;
+        this.intervalReminderManager = intervalReminderManager;
         this.liepinResumeService = liepinResumeService;
         this.liepinJobTaskManager = liepinJobTaskManager;
     }
@@ -105,6 +110,7 @@ public class MessageProcessor {
         videoTaskManager.setOnCompleted(completedVideos::add);
         reminderTaskManager.setOnCompleted(completedReminders::add);
         imageBatchManager.setOnBatchReady(this::processImageBatch);
+        intervalReminderManager.setOnCompleted(completedIntervalReminders::add);
         liepinJobTaskManager.setOnCompleted(completedLiepinTasks::add);
     }
 
@@ -436,5 +442,9 @@ public class MessageProcessor {
                 || trimmed.equals("退出追问")
                 || trimmed.equals("停止文件问答")
                 || trimmed.equals("退出文件问答");
+    }
+
+    public ProcessResult pollCompletedIntervalReminder() {
+        return completedIntervalReminders.poll();
     }
 }

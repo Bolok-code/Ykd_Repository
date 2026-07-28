@@ -247,6 +247,15 @@ public class WeixinBotService {
         }
     }
 
+    private void sendCompletedIntervalReminder() {
+        ProcessResult result = messageProcessor.pollCompletedIntervalReminder();
+        while (result != null) {
+            log.info("[Bot] 推送间隔提醒: userId={}, text={}", result.userId(), result.text());
+            safeSendText(result.userId(), result.text());
+            result = messageProcessor.pollCompletedIntervalReminder();
+        }
+    }
+
 
     private void sendCompletedLiepinTask() {
         ProcessResult result = messageProcessor.pollCompletedLiepinTask();
@@ -347,6 +356,7 @@ public class WeixinBotService {
                         sendCompletedVideo();
                         sendCompletedReminder();
                         sendCompletedImageBatch();
+                        sendCompletedIntervalReminder();
                         sendCompletedLiepinTask();
 
                     } catch (SessionExpiredException e) {
