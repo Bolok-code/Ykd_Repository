@@ -68,7 +68,7 @@ public class ReminderTaskManager {
                     long delaySeconds = entity.getDelaySeconds();
                     long elapsedSeconds = (System.currentTimeMillis() - LocalDateTime.parse(entity.getCreatedAt().replace(" ", "T")).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()) / 1000;
                     long remaining = delaySeconds - elapsedSeconds;
-                    if (remaining < 5) remaining = 5;
+                    if (remaining < 10) remaining = 10;
 
                     task = new ReminderTask(entity.getTaskId(), entity.getUserId(), entity.getMessage(),
                             null, false, null, needsProcessing);
@@ -89,7 +89,7 @@ public class ReminderTaskManager {
                 } else if ("DAILY".equals(type)) {
                     LocalTime dailyTime = LocalTime.parse(entity.getDailyTime());
                     long initialDelay = calculateInitialDelay(dailyTime);
-                    if (initialDelay < 5) initialDelay = 5;
+                    if (initialDelay < 10) initialDelay = 10;
 
                     task = new ReminderTask(entity.getTaskId(), entity.getUserId(), entity.getMessage(),
                             null, true, dailyTime, needsProcessing);

@@ -62,7 +62,7 @@ public class IntervalReminderManager {
                 long intervalSeconds = entity.getIntervalSeconds();
                 long elapsedSeconds = (System.currentTimeMillis() - LocalDateTime.parse(entity.getCreatedAt().replace(" ", "T")).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()) / 1000;
                 long remaining = intervalSeconds - (elapsedSeconds % intervalSeconds);
-                if (remaining < 5) remaining = 5;
+                if (remaining < 10) remaining = 10;
 
                 IntervalTask task = new IntervalTask(entity.getTaskId(), entity.getUserId(),
                         entity.getMessage(), null, intervalSeconds, entity.getNeedsProcessing() == 1);

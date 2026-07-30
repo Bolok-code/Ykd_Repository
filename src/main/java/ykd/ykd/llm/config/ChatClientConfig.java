@@ -33,6 +33,7 @@ public class ChatClientConfig {
                         3. 位置类工具若提示尚未设置位置，直接提醒用户发送”我在XX”设置位置
                         4. 语音播报无明确性别要求时，gender 默认传 “female”
                         5. 用户发送文件并要求分析、总结、翻译文件内容时，调用 parseDocument 工具
+                        6. 【取消/查看优先】用户要求取消或查看提醒时，必须先调用 listIntervalReminders/listReminders 查看列表，再根据序号调用 cancelIntervalReminder/cancelReminder，禁止直接回复
                         """)
                 .defaultAdvisors(new ReActLoggingAdvisor())
                 .build();
