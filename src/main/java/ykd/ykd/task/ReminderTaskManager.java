@@ -4,15 +4,20 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import ykd.ykd.llm.service.LlmService;
+import ykd.ykd.memory.mapper.ReminderTaskMapper;
+import ykd.ykd.memory.model.ReminderTaskEntity;
 import ykd.ykd.processor.ProcessResult;
 import ykd.ykd.processor.UserContext;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,12 +31,6 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * 定时提醒管理器，使用 {@link ScheduledExecutorService} 实现本地定时触发。
- *
- * <p>与 {@link VideoTaskManager} 采用相同的 {@link Consumer} 回调 + 队列解耦模式，
- * 但触发机制不同：视频依赖外部 HTTP 轮询，提醒由 JDK 原生定时器自主触发。</p>
- */
 @Slf4j
 @Component
 public class ReminderTaskManager {
@@ -39,16 +38,82 @@ public class ReminderTaskManager {
     private final LlmService llmService;
     private final ChatClient deepseekClient;
     private final UserContext userContext;
+    private final ReminderTaskMapper reminderTaskMapper;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final Map<String, ReminderTask> tasks = new ConcurrentHashMap<>();
     private Consumer<ProcessResult> onCompleted;
 
     public ReminderTaskManager(@Lazy LlmService llmService,
                                @Qualifier("deepseekClient") ChatClient deepseekClient,
-                               UserContext userContext) {
+                               UserContext userContext,
+                               ReminderTaskMapper reminderTaskMapper) {
         this.llmService = llmService;
         this.deepseekClient = deepseekClient;
         this.userContext = userContext;
+        this.reminderTaskMapper = reminderTaskMapper;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void recover() {
+        List<ReminderTaskEntity> active = reminderTaskMapper.findAllActive();
+        int recovered = 0;
+        for (ReminderTaskEntity entity : active) {
+            String type = entity.getTaskType();
+            if ("INTERVAL".equals(type)) continue;
+            try {
+                boolean needsProcessing = entity.getNeedsProcessing() == 1;
+                ReminderTask task;
+
+                if ("ONCE".equals(type)) {
+                    long delaySeconds = entity.getDelaySeconds();
+                    long elapsedSeconds = (System.currentTimeMillis() - LocalDateTime.parse(entity.getCreatedAt().replace(" ", "T")).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()) / 1000;
+                    long remaining = delaySeconds - elapsedSeconds;
+                    if (remaining < 5) remaining = 5;
+
+                    task = new ReminderTask(entity.getTaskId(), entity.getUserId(), entity.getMessage(),
+                            null, false, null, needsProcessing);
+                    ScheduledFuture<?> future = scheduler.schedule(() -> {
+                        try {
+                            fire(task);
+                            tasks.remove(task.taskId);
+                            reminderTaskMapper.cancelByTaskId(task.taskId);
+                        } catch (Exception e) {
+                            log.error("[Reminder] 恢复任务触发异常: taskId={}, userId={}", task.taskId, task.userId, e);
+                        }
+                    }, remaining, TimeUnit.SECONDS);
+                    task.future = future;
+                    tasks.put(task.taskId, task);
+
+                    log.info("[Reminder] 恢复一次性提醒: taskId={}, userId={}, remaining={}s, msg={}",
+                            task.taskId, task.userId, remaining, task.message);
+                } else if ("DAILY".equals(type)) {
+                    LocalTime dailyTime = LocalTime.parse(entity.getDailyTime());
+                    long initialDelay = calculateInitialDelay(dailyTime);
+                    if (initialDelay < 5) initialDelay = 5;
+
+                    task = new ReminderTask(entity.getTaskId(), entity.getUserId(), entity.getMessage(),
+                            null, true, dailyTime, needsProcessing);
+                    ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(() -> {
+                        try {
+                            fire(task);
+                        } catch (Exception e) {
+                            log.error("[Reminder] 每日恢复触发异常: taskId={}, userId={}", task.taskId, task.userId, e);
+                        }
+                    }, initialDelay, 86400, TimeUnit.SECONDS);
+                    task.future = future;
+                    tasks.put(task.taskId, task);
+
+                    log.info("[Reminder] 恢复每日提醒: taskId={}, userId={}, time={}, msg={}",
+                            task.taskId, task.userId, dailyTime, task.message);
+                }
+                recovered++;
+            } catch (Exception e) {
+                log.error("[Reminder] 恢复失败: taskId={}", entity.getTaskId(), e);
+            }
+        }
+        if (recovered > 0) {
+            log.info("[Reminder] 共恢复 {} 个提醒", recovered);
+        }
     }
 
     @PreDestroy
@@ -60,9 +125,7 @@ public class ReminderTaskManager {
         this.onCompleted = callback;
     }
 
-    // ==================== 一次性提醒 ====================
-
-    public String scheduleOnce(String userId, String message, String timeExpression) {
+    public String scheduleOnce(String userId, String message, String timeExpression, boolean needsProcessing) {
         long delaySeconds = parseDelay(timeExpression);
         if (delaySeconds < 0) {
             return "无法识别时间表达，请用'10分钟后'、'2小时后'或'30秒后'";
@@ -72,12 +135,14 @@ public class ReminderTaskManager {
         }
 
         String taskId = UUID.randomUUID().toString().substring(0, 8);
+        ReminderTask task = new ReminderTask(taskId, userId, message, null, false, null, needsProcessing);
         ScheduledFuture<?> future;
         try {
             future = scheduler.schedule(() -> {
                 try {
-                    fire(userId, message);
+                    fire(task);
                     tasks.remove(taskId);
+                    reminderTaskMapper.cancelByTaskId(taskId);
                 } catch (Exception e) {
                     log.error("[Reminder] 触发异常: taskId={}, userId={}", taskId, userId, e);
                 }
@@ -86,16 +151,26 @@ public class ReminderTaskManager {
             log.error("[Reminder] 调度器拒绝任务: userId={}, msg={}", userId, message, e);
             return "⏰ 系统繁忙，请稍后再试";
         }
+        task.future = future;
 
-        tasks.put(taskId, new ReminderTask(taskId, userId, message, future, false, null));
-        log.info("[Reminder] 一次性提醒已创建: taskId={}, userId={}, delay={}s, msg={}",
-                taskId, userId, delaySeconds, message);
+        tasks.put(taskId, task);
+
+        ReminderTaskEntity entity = new ReminderTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setUserId(userId);
+        entity.setMessage(message);
+        entity.setTimeExpression(timeExpression);
+        entity.setTaskType("ONCE");
+        entity.setDelaySeconds((int) delaySeconds);
+        entity.setNeedsProcessing(needsProcessing ? 1 : 0);
+        reminderTaskMapper.insert(entity);
+
+        log.info("[Reminder] 一次性提醒已创建: taskId={}, userId={}, delay={}s, msg={}, needsProcessing={}",
+                taskId, userId, delaySeconds, message, needsProcessing);
         return "⏰ 已设置提醒：" + message + "（" + formatDelay(delaySeconds) + "后通知）";
     }
 
-    // ==================== 每日提醒 ====================
-
-    public String scheduleDaily(String userId, String message, String timeExpression) {
+    public String scheduleDaily(String userId, String message, String timeExpression, boolean needsProcessing) {
         LocalTime target = parseDailyTime(timeExpression);
         if (target == null) {
             return "无法识别每日时间，请用'每天早上8点'或'每天08:00'";
@@ -103,11 +178,12 @@ public class ReminderTaskManager {
 
         long initialDelay = calculateInitialDelay(target);
         String taskId = UUID.randomUUID().toString().substring(0, 8);
+        ReminderTask task = new ReminderTask(taskId, userId, message, null, true, target, needsProcessing);
         ScheduledFuture<?> future;
         try {
             future = scheduler.scheduleAtFixedRate(() -> {
                 try {
-                    fire(userId, message);
+                    fire(task);
                 } catch (Exception e) {
                     log.error("[Reminder] 每日触发异常: taskId={}, userId={}", taskId, userId, e);
                 }
@@ -116,14 +192,24 @@ public class ReminderTaskManager {
             log.error("[Reminder] 调度器拒绝每日任务: userId={}, msg={}", userId, message, e);
             return "⏰ 系统繁忙，请稍后再试";
         }
+        task.future = future;
 
-        tasks.put(taskId, new ReminderTask(taskId, userId, message, future, true, target));
-        log.info("[Reminder] 每日提醒已创建: taskId={}, userId={}, time={}, msg={}",
-                taskId, userId, target, message);
+        tasks.put(taskId, task);
+
+        ReminderTaskEntity entity = new ReminderTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setUserId(userId);
+        entity.setMessage(message);
+        entity.setTimeExpression(timeExpression);
+        entity.setTaskType("DAILY");
+        entity.setDailyTime(target.toString());
+        entity.setNeedsProcessing(needsProcessing ? 1 : 0);
+        reminderTaskMapper.insert(entity);
+
+        log.info("[Reminder] 每日提醒已创建: taskId={}, userId={}, time={}, msg={}, needsProcessing={}",
+                taskId, userId, target, message, needsProcessing);
         return "⏰ 已设置每日提醒：" + message + "，每天 " + target + " 通知";
     }
-
-    // ==================== 查看 ====================
 
     public String listTasks(String userId) {
         List<ReminderTask> userTasks = tasks.values().stream()
@@ -149,8 +235,6 @@ public class ReminderTaskManager {
         return sb.toString().trim();
     }
 
-    // ==================== 取消 ====================
-
     public String cancelByIndex(String userId, int index) {
         List<ReminderTask> userTasks = tasks.values().stream()
                 .filter(t -> t.userId.equals(userId))
@@ -168,11 +252,10 @@ public class ReminderTaskManager {
             return "取消失败，请重试";
         }
         tasks.remove(task.taskId);
+        reminderTaskMapper.cancelByTaskId(task.taskId);
         log.info("[Reminder] 提醒已取消: taskId={}, userId={}, msg={}", task.taskId, userId, task.message);
         return "已取消提醒：" + task.message;
     }
-
-    // ==================== 时间解析 ====================
 
     private long parseDelay(String expr) {
         Pattern p = Pattern.compile("(\\d+)\\s*(分钟|小时|秒)(后)?");
@@ -215,21 +298,38 @@ public class ReminderTaskManager {
         return mins > 0 ? hours + "小时" + mins + "分钟" : hours + "小时";
     }
 
-    private void fire(String userId, String message) {
+    private void fire(ReminderTask task) {
+        if (task.needsProcessing) {
+            fireWithLLM(task);
+        } else {
+            fireDirect(task);
+        }
+    }
+
+    private void fireDirect(ReminderTask task) {
         if (onCompleted == null) {
-            log.warn("[Reminder] 回调未设置，提醒丢失: userId={}, msg={}", userId, message);
+            log.warn("[Reminder] 回调未设置，提醒丢失: userId={}, msg={}", task.userId, task.message);
             return;
         }
-        userContext.executeAs(userId, () -> {
+        onCompleted.accept(ProcessResult.text("⏰ 提醒：" + task.message, task.userId));
+    }
+
+    private void fireWithLLM(ReminderTask task) {
+        if (onCompleted == null) {
+            log.warn("[Reminder] 回调未设置，提醒丢失: userId={}, msg={}", task.userId, task.message);
+            return;
+        }
+        userContext.executeAs(task.userId, () -> {
             try {
-                String prompt = "⏰ 定时提醒：" + message;
-                String reply = llmService.chat(prompt, null, deepseekClient, userId);
+                String prompt = "⏰ 定时提醒：" + task.message;
+                String reply = llmService.chat(prompt, null, deepseekClient, task.userId);
                 log.info("[Reminder] LLM 回复: userId={}, reply={}",
-                        userId, reply != null ? reply.substring(0, Math.min(100, reply.length())) : null);
-                onCompleted.accept(ProcessResult.text(reply, userId));
+                        task.userId, reply != null ? reply.substring(0, Math.min(100, reply.length())) : null);
+                onCompleted.accept(ProcessResult.text(reply, task.userId));
             } catch (Exception e) {
-                log.error("[Reminder] LLM 调用失败，降级发送原文: userId={}, msg={}", userId, message, e);
-                onCompleted.accept(ProcessResult.text("⏰ 提醒：" + message, userId));
+                log.error("[Reminder] LLM 调用失败，降级发送原文: userId={}, msg={}",
+                        task.userId, task.message, e);
+                onCompleted.accept(ProcessResult.text("⏰ 提醒：" + task.message, task.userId));
             }
         });
     }
@@ -238,18 +338,20 @@ public class ReminderTaskManager {
         final String taskId;
         final String userId;
         final String message;
-        final ScheduledFuture<?> future;
+        volatile ScheduledFuture<?> future;
         final boolean daily;
         final LocalTime dailyTime;
+        final boolean needsProcessing;
 
         ReminderTask(String taskId, String userId, String message,
-                     ScheduledFuture<?> future, boolean daily, LocalTime dailyTime) {
+                     ScheduledFuture<?> future, boolean daily, LocalTime dailyTime, boolean needsProcessing) {
             this.taskId = taskId;
             this.userId = userId;
             this.message = message;
             this.future = future;
             this.daily = daily;
             this.dailyTime = dailyTime;
+            this.needsProcessing = needsProcessing;
         }
     }
 }

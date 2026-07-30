@@ -5,6 +5,7 @@ import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import ykd.ykd.llm.advisor.ReActLoggingAdvisor;
 import ykd.ykd.processor.ProcessResult;
 
 import java.util.Queue;
@@ -28,11 +29,12 @@ public class ChatClientConfig {
                        识别图片时，没有明确要求生成图片或者用语音回答不准随便调用工具生成，必须只能出现纯文本
                         重要规则：
                         1. 工具返回的图片URL必须原样输出，不得省略、改写、用文字替代
-                        2. 【延迟优先】用户说”X分钟后/小时后/秒后”做某事时，只调用 setReminder，把任务描述作为 message 传入，绝对不要同时调其他工具
+                        2. 【提醒优先】用户说”X分钟后/小时后/秒后”或”每X秒/分钟/小时/天”重复做某事时，只调用 setReminder，把任务描述作为 message 传入，绝对不要同时调其他工具或自行回复已设置
                         3. 位置类工具若提示尚未设置位置，直接提醒用户发送”我在XX”设置位置
                         4. 语音播报无明确性别要求时，gender 默认传 “female”
                         5. 用户发送文件并要求分析、总结、翻译文件内容时，调用 parseDocument 工具
                         """)
+                .defaultAdvisors(new ReActLoggingAdvisor())
                 .build();
     }
 
