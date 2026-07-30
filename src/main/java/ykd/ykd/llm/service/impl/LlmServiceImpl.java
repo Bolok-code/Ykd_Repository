@@ -52,7 +52,11 @@ public class LlmServiceImpl implements LlmService {
             text = "请描述这些图片";
         }
         if (looksLikeReminder(text) && text != null) {
-            text = "【必须调用提醒工具：设置提醒用setReminder，取消/查看先调listIntervalReminders/listReminders再调cancelIntervalReminder/cancelReminder。禁止直接回复文字】\n" + text;
+            String direct = interceptReminder(text);
+            if (direct != null) {
+                memoryManagerService.save(userId, text, direct, "System");
+                return direct;
+            }
         }
         String finalText = text;
         String textPreview = finalText != null ? (finalText.length() > 100 ? finalText.substring(0, 100) + "..." : finalText) : null;
@@ -193,5 +197,60 @@ public class LlmServiceImpl implements LlmService {
         if (text.contains("提醒") || text.contains("取消") || text.contains("任务")) return true;
         if (text.startsWith("每") && text.matches(".*[秒分钟时天].*")) return true;
         return false;
+    }
+
+    private String interceptReminder(String text) {
+        if (text == null) return null;
+        if (text.contains("取消") || text.contains("查看") || text.contains("列表")
+                || text.contains("还有哪些") || text.contains("有哪些")) {
+            return null;
+        }
+        String timeExpr = extractTimeExpr(text);
+        String message = extractReminderMessage(text, timeExpr);
+        if (timeExpr == null || message == null) return null;
+        return reminderTools.setReminder(timeExpr, message);
+    }
+
+    private String extractTimeExpr(String text) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("每\\s*(?:隔\\s*)?(\\d+)\\s*(秒|分钟?|小时)").matcher(text);
+        if (m.find()) return "每" + m.group(1) + m.group(2).charAt(0);
+        m = java.util.regex.Pattern
+                .compile("(\\d+)\\s*(秒|分钟?|小时)\\s*后").matcher(text);
+        if (m.find()) return m.group(1) + m.group(2).charAt(0) + "后";
+        m = java.util.regex.Pattern
+                .compile("每天\\s*(\\d{1,2})[:：点](\\d{0,2})?").matcher(text);
+        if (m.find()) {
+            String min = m.group(2) != null && !m.group(2).isEmpty() ? m.group(2) : "00";
+            return "每天" + m.group(1) + ":" + min;
+        }
+        m = java.util.regex.Pattern
+                .compile("每[周週]([一二三四五六日天])\\s*(\\d{1,2})[:：点](\\d{0,2})?").matcher(text);
+        if (m.find()) {
+            String min = m.group(3) != null && !m.group(3).isEmpty() ? m.group(3) : "00";
+            return "每周" + m.group(1) + m.group(2) + ":" + min;
+        }
+        return null;
+    }
+
+    private String extractReminderMessage(String text, String timeExpr) {
+        if (timeExpr == null) return null;
+        int idx = text.indexOf(timeExpr);
+        if (idx < 0) {
+            String cn = timeExpr.replace("每", "").replace("后", "");
+            idx = text.indexOf(cn);
+        }
+        if (idx >= 0) {
+            String after = text.substring(idx).replaceFirst(
+                    java.util.regex.Pattern.quote(timeExpr), "").trim();
+            if (after.length() > 1) {
+                after = after.replaceAll("^[给帮替]?[我你]\\s*", "");
+                after = after.replaceAll("^[做发]", "");
+                after = after.replaceAll("^一条消息\\s*", "");
+                after = after.replaceAll("^提醒\\s*", "");
+            }
+            if (!after.isBlank()) return after;
+        }
+        return text.replace(timeExpr, "").replaceAll("^[给帮替]?[我你]\\s*", "").trim();
     }
 }

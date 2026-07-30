@@ -10,6 +10,7 @@ import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
@@ -23,6 +24,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -42,16 +47,21 @@ public class WeixinBotService {
     private final MemoryManagerService memoryManagerService;
     private final ObjectMapper objectMapper;
     private final PerUserTaskDispatcher dispatcher;
+    private final ApplicationEventPublisher eventPublisher;
 
     private ILinkClient client;
     private volatile boolean running = true;
     private final AtomicBoolean pollingStarted = new AtomicBoolean(false);
+    private final Map<String, Long> lastSendTime = new ConcurrentHashMap<>();
+    private static final long MIN_SEND_INTERVAL_MS = 2_000L;
+    private final CountDownLatch loginReady = new CountDownLatch(1);
 
     public WeixinBotService(MessageProcessor messageProcessor, MemoryManagerService memoryManagerService,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper, ApplicationEventPublisher eventPublisher) {
         this.messageProcessor = messageProcessor;
         this.memoryManagerService = memoryManagerService;
         this.objectMapper = objectMapper;
+        this.eventPublisher = eventPublisher;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
 
@@ -91,6 +101,15 @@ public class WeixinBotService {
         return Files.exists(SESSION_FILE);
     }
 
+    public boolean awaitReady(long timeoutSeconds) {
+        try {
+            return loginReady.await(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     /**
      * 删除保存的 Session 文件。
      */
@@ -122,6 +141,8 @@ public class WeixinBotService {
                         if (client != null) {
                             saveSession(client.exportResumeContext());
                         }
+                        loginReady.countDown();
+                        eventPublisher.publishEvent(new LoginReadyEvent());
                         startPolling();
                     }
 
@@ -147,6 +168,8 @@ public class WeixinBotService {
                     })
                     .resumeContext(resumeContext)
                     .build();
+            loginReady.countDown();
+            eventPublisher.publishEvent(new LoginReadyEvent());
             startPolling();
             return null;
         }
@@ -192,8 +215,17 @@ public class WeixinBotService {
     }
 
     private void safeSendText(String userId, String text) {
+        long now = System.currentTimeMillis();
+        Long last = lastSendTime.get(userId);
+        if (last != null) {
+            long gap = now - last;
+            if (gap < MIN_SEND_INTERVAL_MS) {
+                sleep(MIN_SEND_INTERVAL_MS - gap);
+            }
+        }
         try {
             client.sendText(userId, text);
+            lastSendTime.put(userId, System.currentTimeMillis());
         } catch (Exception e) {
             log.error("[Bot] 发送文本失败: userId={}", userId, e);
         }
@@ -227,18 +259,6 @@ public class WeixinBotService {
             log.info("[Bot] 视频发送成功: userId={}, size={}KB", userId, videoData.length / 1024);
         } catch (Exception e) {
             log.error("[Bot] 发送视频失败: userId={}", userId, e);
-        }
-    }
-
-    /**
-     * 检查并发送后台完成的视频。
-     */
-    private void sendCompletedReminder() {
-        ProcessResult result = messageProcessor.pollCompletedReminder();
-        while (result != null) {
-            log.info("[Bot] 推送提醒: userId={}, text={}", result.userId(), result.text());
-            safeSendText(result.userId(), result.text());
-            result = messageProcessor.pollCompletedReminder();
         }
     }
 
@@ -348,7 +368,6 @@ public class WeixinBotService {
                         }
 
                         sendCompletedVideo();
-                        sendCompletedReminder();
                         sendCompletedImageBatch();
                         sendCompletedLiepinTask();
 

@@ -12,7 +12,7 @@ import java.util.List;
 @Mapper
 public interface ReminderTaskMapper {
 
-    @Insert("INSERT INTO reminder_task (task_id, user_id, message, time_expression, task_type, interval_seconds, daily_time, delay_seconds, needs_processing) VALUES (#{taskId}, #{userId}, #{message}, #{timeExpression}, #{taskType}, #{intervalSeconds}, #{dailyTime}, #{delaySeconds}, #{needsProcessing})")
+    @Insert("INSERT INTO reminder_task (task_id, user_id, message, time_expression, task_type, interval_seconds, daily_time, delay_seconds, cron_expression, needs_processing) VALUES (#{taskId}, #{userId}, #{message}, #{timeExpression}, #{taskType}, #{intervalSeconds}, #{dailyTime}, #{delaySeconds}, #{cronExpression}, #{needsProcessing})")
     @SelectKey(statement = "SELECT last_insert_rowid()", keyProperty = "id", before = false, resultType = Long.class)
     int insert(ReminderTaskEntity entity);
 
