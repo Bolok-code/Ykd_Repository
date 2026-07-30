@@ -137,3 +137,20 @@ CREATE TABLE IF NOT EXISTS liepin_application_record (
 
 CREATE INDEX IF NOT EXISTS idx_liepin_application_record_user_status
     ON liepin_application_record (user_id, status, id DESC);
+
+CREATE TABLE IF NOT EXISTS reminder_task (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    time_expression TEXT NOT NULL,
+    task_type TEXT NOT NULL CHECK (task_type IN ('ONCE', 'DAILY', 'INTERVAL')),
+    interval_seconds INTEGER,
+    daily_time TEXT,
+    delay_seconds INTEGER,
+    needs_processing INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'CANCELLED')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_reminder_task_user ON reminder_task(user_id, status);

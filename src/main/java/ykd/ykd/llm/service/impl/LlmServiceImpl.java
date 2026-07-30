@@ -43,7 +43,6 @@ public class LlmServiceImpl implements LlmService {
     private final SkillSelector skillSelector;
     private final SkillToolResolver skillToolResolver;
 
-
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId) {
         long start = System.currentTimeMillis();
@@ -51,6 +50,9 @@ public class LlmServiceImpl implements LlmService {
         boolean hasImages = imageUrls != null && !imageUrls.isEmpty();
         if ((text == null || text.isBlank()) && hasImages) {
             text = "请描述这些图片";
+        }
+        if (looksLikeReminder(text) && text != null) {
+            text = "【必须调用提醒工具：设置提醒用setReminder，取消/查看先调listIntervalReminders/listReminders再调cancelIntervalReminder/cancelReminder。禁止直接回复文字】\n" + text;
         }
         String finalText = text;
         String textPreview = finalText != null ? (finalText.length() > 100 ? finalText.substring(0, 100) + "..." : finalText) : null;
@@ -183,5 +185,13 @@ public class LlmServiceImpl implements LlmService {
                 skill.description(),
                 skill.instructions()
         );
+    }
+
+    private static boolean looksLikeReminder(String text) {
+        if (text == null) return false;
+        if (text.startsWith("⏰ 定时提醒")) return false;
+        if (text.contains("提醒") || text.contains("取消") || text.contains("任务")) return true;
+        if (text.startsWith("每") && text.matches(".*[秒分钟时天].*")) return true;
+        return false;
     }
 }

@@ -199,6 +199,10 @@ public class WeixinBotService {
         }
     }
 
+    public void sendTextToUser(String userId, String text) {
+        safeSendText(userId, text);
+    }
+
     private void safeSendImage(String userId, byte[] imageData) {
         try {
             client.sendImage(userId, imageData, "image.png", "");
@@ -246,16 +250,6 @@ public class WeixinBotService {
             result = messageProcessor.pollCompletedImageBatch();
         }
     }
-
-    private void sendCompletedIntervalReminder() {
-        ProcessResult result = messageProcessor.pollCompletedIntervalReminder();
-        while (result != null) {
-            log.info("[Bot] 推送间隔提醒: userId={}, text={}", result.userId(), result.text());
-            safeSendText(result.userId(), result.text());
-            result = messageProcessor.pollCompletedIntervalReminder();
-        }
-    }
-
 
     private void sendCompletedLiepinTask() {
         ProcessResult result = messageProcessor.pollCompletedLiepinTask();
@@ -356,7 +350,6 @@ public class WeixinBotService {
                         sendCompletedVideo();
                         sendCompletedReminder();
                         sendCompletedImageBatch();
-                        sendCompletedIntervalReminder();
                         sendCompletedLiepinTask();
 
                     } catch (SessionExpiredException e) {
