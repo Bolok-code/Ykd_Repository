@@ -173,10 +173,10 @@ public class MessageProcessor {
                     if (resumeSaved) {
                         liepinResumeService.save(fromUserId, fileName, cachedContent);
                     }
-                    String prompt = String.format(
-                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请给出简要总结。",
+                    String systemContext = String.format(
+                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",
                             fileName, cachedContent);
-                    String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
+                    String reply = llmService.chat("请给出简要总结", List.of(), deepseekClient, fromUserId, systemContext);
                     result[0] = resumeSaved
                             ? reply + "\n\n已识别为简历并保存，可继续让我在猎聘搜索岗位。"
                             : reply;
@@ -211,10 +211,10 @@ public class MessageProcessor {
                 String finalText = text;
                 userContext.executeAs(fromUserId, () -> {
                     try {
-                        String prompt = String.format(
-                                "用户之前发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n用户现在针对该文件提问：%s\n请根据文件内容回答用户的问题。",
-                                cachedFileName, cachedContent, finalText);
-                        String reply = llmService.chat(prompt, List.of(), deepseekClient, fromUserId);
+                        String systemContext = String.format(
+                                "用户之前发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请根据文件内容回答用户的问题。",
+                                cachedFileName, cachedContent);
+                        String reply = llmService.chat(finalText, List.of(), deepseekClient, fromUserId, systemContext);
                         result[0] = reply;
                     } catch (Exception e) {
                         log.error("[Processor] 文件追问处理失败: {}", e.getMessage(), e);

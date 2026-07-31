@@ -14,6 +14,7 @@ import org.springframework.util.MimeTypeUtils;
 import ykd.ykd.llm.tools.*;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
+import ykd.ykd.rag.tools.KnowledgeBaseTools;
 import ykd.ykd.skill.model.SkillDefinition;
 import ykd.ykd.skill.selector.SkillSelector;
 import ykd.ykd.skill.tool.SkillToolResolver;
@@ -42,9 +43,15 @@ public class LlmServiceImpl implements LlmService {
     private final DocumentTools documentTools;
     private final SkillSelector skillSelector;
     private final SkillToolResolver skillToolResolver;
+    private final KnowledgeBaseTools knowledgeBaseTools;
 
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId) {
+        return chat(text, imageUrls, client, userId, null);
+    }
+
+    @Override
+    public String chat(String text, List<String> imageUrls, ChatClient client, String userId, String systemContext) {
         long start = System.currentTimeMillis();
 
         boolean hasImages = imageUrls != null && !imageUrls.isEmpty();
@@ -61,6 +68,9 @@ public class LlmServiceImpl implements LlmService {
             List<Message> history = memoryManagerService.getHistory(userId);
             /*
              * 图片走Agnes视觉模型，当前猎聘Skill只处理文字请求。
+             *
+             * Skill 路由仅使用 finalText（用户原话），不包含系统上下文，
+             * 避免文档内容中的关键词误触发 Skill。
              */
             Optional<SkillDefinition> selectedSkill =
                     hasImages
@@ -72,6 +82,14 @@ public class LlmServiceImpl implements LlmService {
              */
             List<Message> requestMessages =
                     new ArrayList<>(history);
+
+            // 先注入文档等系统上下文，让 LLM 在回复时参考
+            if (systemContext != null && !systemContext.isBlank()) {
+                requestMessages.add(
+                        new SystemMessage(systemContext)
+                );
+                log.debug("[LLM] 已注入系统上下文: length={}", systemContext.length());
+            }
 
             selectedSkill.ifPresent(skill -> {
                 requestMessages.add(
@@ -132,7 +150,8 @@ public class LlmServiceImpl implements LlmService {
                         translateTools,
                         emailTools,
                         documentTools,
-                        webSearchTools
+                        webSearchTools,
+                        knowledgeBaseTools
                 );
             }
 
@@ -142,6 +161,7 @@ public class LlmServiceImpl implements LlmService {
 
             String content = chatResponse.getResult().getOutput().getText();
             String modelName = hasImages ? "Agnes" : "DeepSeek";
+            // 只用用户原话保存历史，不含系统上下文
             memoryManagerService.save(userId, finalText, content, modelName);
 
             Usage usage = chatResponse.getMetadata().getUsage();

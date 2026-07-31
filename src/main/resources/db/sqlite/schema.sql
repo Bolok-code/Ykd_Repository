@@ -154,3 +154,29 @@ CREATE TABLE IF NOT EXISTS reminder_task (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reminder_task_user ON reminder_task(user_id, status);
+CREATE TABLE IF NOT EXISTS knowledge_document (
+                                                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                  user_id TEXT NOT NULL,
+                                                  file_name TEXT NOT NULL,
+                                                  file_type TEXT,
+                                                  file_hash TEXT NOT NULL,
+                                                  status TEXT NOT NULL,
+                                                  created_at TEXT NOT NULL,
+                                                  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS knowledge_chunk (
+                                               id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                               document_id INTEGER NOT NULL,
+                                               chunk_index INTEGER NOT NULL,
+                                               content TEXT NOT NULL,
+                                               embedding TEXT NOT NULL,
+                                               created_at TEXT NOT NULL,
+                                               FOREIGN KEY (document_id)
+    REFERENCES knowledge_document(id)
+    ON DELETE CASCADE
+    );
+CREATE INDEX IF NOT EXISTS idx_knowledge_document_user_id
+    ON knowledge_document(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_document_id
+    ON knowledge_chunk(document_id);
