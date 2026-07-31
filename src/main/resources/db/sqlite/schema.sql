@@ -144,10 +144,11 @@ CREATE TABLE IF NOT EXISTS reminder_task (
     user_id TEXT NOT NULL,
     message TEXT NOT NULL,
     time_expression TEXT NOT NULL,
-    task_type TEXT NOT NULL CHECK (task_type IN ('ONCE', 'DAILY', 'INTERVAL')),
+    task_type TEXT NOT NULL CHECK (task_type IN ('ONCE', 'DAILY', 'INTERVAL', 'WEEKLY')),
     interval_seconds INTEGER,
     daily_time TEXT,
     delay_seconds INTEGER,
+    cron_expression TEXT,
     needs_processing INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'CANCELLED')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

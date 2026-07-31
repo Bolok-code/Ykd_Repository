@@ -13,6 +13,7 @@ public class ReminderTaskEntity {
     private Integer intervalSeconds;
     private String dailyTime;
     private Integer delaySeconds;
+    private String cronExpression;
     private Integer needsProcessing;
     private String status;
     private String createdAt;

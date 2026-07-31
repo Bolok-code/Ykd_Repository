@@ -24,10 +24,35 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * LLM 调用编排层。
+ *
+ * <h3>处理流程</h3>
+ * <ol>
+ *   <li>文本预处理（空格消息、图片兜底文案）</li>
+ *   <li>提醒拦截 — 正则匹配提醒请求，直接调工具，绕过 LLM 避免幻觉</li>
+ *   <li>Skill 匹配 — 关键词命中时加载对应 Skill，限制工具集</li>
+ *   <li>加载对话历史，注入系统上下文（文档内容等）</li>
+ *   <li>注入 Skill 提示词（如果有）</li>
+ *   <li>注册工具集（Skill 工具 or 通用工具（含 RAG 知识库））</li>
+ *   <li>调用 LLM，保存对话记忆，触发压缩检查</li>
+ * </ol>
+ *
+ * <h3>工具隔离</h3>
+ * 命中 Skill 时 LLM 只能看到该 Skill 声明的工具白名单；
+ * 未命中时暴露通用工具（含 RAG 知识库）但不暴露猎聘工具。
+ * 猎聘工具只能在 liepin-auto-apply Skill 激活时使用。
+ */
 @Slf4j
-@RequiredArgsConstructor
 @Service
+@RequiredArgsConstructor
 public class LlmServiceImpl implements LlmService {
+
+    private final ReminderInterceptor reminderInterceptor;
+    private final SkillSelector skillSelector;
+    private final SkillToolResolver skillToolResolver;
+    private final MemoryManagerService memoryManagerService;
+
     private final WebSearchTools webSearchTools;
     private final LinkTools linkTools;
     private final WeatherTools weatherTools;
@@ -36,15 +61,21 @@ public class LlmServiceImpl implements LlmService {
     private final VoiceTools voiceTools;
     private final ReminderTools reminderTools;
     private final LocationTools locationTools;
-    private final MemoryManagerService memoryManagerService;
     private final CalculatorTools calculatorTools;
     private final TranslateTools translateTools;
     private final EmailTools emailTools;
     private final DocumentTools documentTools;
-    private final SkillSelector skillSelector;
-    private final SkillToolResolver skillToolResolver;
     private final KnowledgeBaseTools knowledgeBaseTools;
 
+    /**
+     * 处理用户消息，返回 LLM 回复。
+     *
+     * @param text      用户文本（可为空，当只有图片时）
+     * @param imageUrls 图片 data URI 列表
+     * @param client    目标 ChatClient（DeepSeek 或 Agnes）
+     * @param userId    微信用户 ID，用于记忆隔离
+     * @return LLM 回复文本
+     */
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId) {
         return chat(text, imageUrls, client, userId, null);
@@ -53,165 +84,156 @@ public class LlmServiceImpl implements LlmService {
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId, String systemContext) {
         long start = System.currentTimeMillis();
-
         boolean hasImages = imageUrls != null && !imageUrls.isEmpty();
+
+        // 只有图片没有文字时，给模型一个兜底指令
         if ((text == null || text.isBlank()) && hasImages) {
             text = "请描述这些图片";
         }
-        if (looksLikeReminder(text) && text != null) {
-            text = "【必须调用提醒工具：设置提醒用setReminder，取消/查看先调listIntervalReminders/listReminders再调cancelIntervalReminder/cancelReminder。禁止直接回复文字】\n" + text;
-        }
-        String finalText = text;
-        String textPreview = finalText != null ? (finalText.length() > 100 ? finalText.substring(0, 100) + "..." : finalText) : null;
-        log.info("[LLM] 请求开始: userId={}, text={}, imageCount={}", userId, textPreview, hasImages ? imageUrls.size() : 0);
-        try {
-            List<Message> history = memoryManagerService.getHistory(userId);
-            /*
-             * 图片走Agnes视觉模型，当前猎聘Skill只处理文字请求。
-             *
-             * Skill 路由仅使用 finalText（用户原话），不包含系统上下文，
-             * 避免文档内容中的关键词误触发 Skill。
-             */
-            Optional<SkillDefinition> selectedSkill =
-                    hasImages
-                            ? Optional.empty()
-                            : skillSelector.select(finalText);
-            /*
-             * 创建新集合，不能直接修改history，
-             * 避免Skill提示词被写入长期对话记忆。
-             */
-            List<Message> requestMessages =
-                    new ArrayList<>(history);
 
-            // 先注入文档等系统上下文，让 LLM 在回复时参考
+        // 提醒请求直接拦截，正则提取时间+消息，不走 LLM
+        String intercepted = reminderInterceptor.tryIntercept(text, userId);
+        if (intercepted != null) return intercepted;
+
+        String finalText = text;
+        log.info("[LLM] 请求开始: userId={}, text={}, imageCount={}",
+                userId, abbrev(finalText, 100), hasImages ? imageUrls.size() : 0);
+
+        try {
+            // 1. 加载当前用户的对话历史
+            List<Message> history = memoryManagerService.getHistory(userId);
+            // 2. Skill 匹配（图片消息不匹配 Skill，走视觉模型独立处理）
+            //    Skill 路由仅使用 finalText（用户原话），不包含系统上下文，
+            //    避免文档内容中的关键词误触发 Skill。
+            Optional<SkillDefinition> selectedSkill = hasImages
+                    ? Optional.empty()
+                    : skillSelector.select(finalText);
+
+            // 3. 构建请求消息列表（复制历史，避免 Skill 提示词被写入长期记忆）
+            List<Message> requestMessages = new ArrayList<>(history);
+
+            // 3a. 注入系统上下文（文档内容等），让 LLM 在回复时参考
             if (systemContext != null && !systemContext.isBlank()) {
-                requestMessages.add(
-                        new SystemMessage(systemContext)
-                );
+                requestMessages.add(new SystemMessage(systemContext));
                 log.debug("[LLM] 已注入系统上下文: length={}", systemContext.length());
             }
-
             selectedSkill.ifPresent(skill -> {
-                requestMessages.add(
-                        0,
-                        new SystemMessage(
-                                buildSkillPrompt(skill)
-                        )
-                );
-
-                log.info(
-                        "[LLM] 本次请求启用Skill: userId={}, skill={}, tools={}",
-                        userId,
-                        skill.name(),
-                        skill.tools()
-                );
+                requestMessages.add(0, new SystemMessage(buildSkillPrompt(skill)));
+                log.info("[LLM] 启用Skill: userId={}, skill={}, tools={}",
+                        userId, skill.name(), skill.tools().size());
             });
 
+            // 4. 组装请求
             ChatClient.ChatClientRequestSpec requestSpec = client.prompt()
                     .messages(requestMessages)
-                    .user(userSpec -> {
-                        if (finalText != null && !finalText.isBlank()) {
-                            userSpec.text(finalText);
-                        }
-                        if (hasImages) {
-                            for (String imageUrl : imageUrls) {
-                                userSpec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(imageUrl)));
-                            }
-                        }
-                    });
+                    .user(userSpec -> buildUserMessage(userSpec, finalText, imageUrls));
 
-            if (selectedSkill.isPresent()) {
-                SkillDefinition skill = selectedSkill.get();
-                ToolCallback[] skillTools =
-                        skillToolResolver.resolve(skill);
+            // 5. 注册工具 — Skill 模式 vs 普通模式
+            requestSpec.tools(selectedSkill.isPresent()
+                    ? resolveSkillTools(selectedSkill.get(), userId)
+                    : defaultTools());
 
-                requestSpec.tools((Object[]) skillTools);
-
-                log.info(
-                        "[LLM] 已限制为Skill工具: userId={}, skill={}, toolCount={}",
-                        userId,
-                        skill.name(),
-                        skillTools.length
-                );
-            } else {
-                /*
-                 * 普通请求继续使用原有工具，但不暴露猎聘工具。
-                 * 猎聘工具只能在命中liepin-auto-apply Skill后使用。
-                 */
-                requestSpec.tools(
-                        linkTools,
-                        weatherTools,
-                        imageTools,
-                        videoTools,
-                        voiceTools,
-                        reminderTools,
-                        locationTools,
-                        calculatorTools,
-                        translateTools,
-                        emailTools,
-                        documentTools,
-                        webSearchTools,
-                        knowledgeBaseTools
-                );
-            }
-
-            ChatResponse chatResponse = requestSpec
-                    .call()
-                    .chatResponse();
-
+            // 6. 调用 LLM
+            ChatResponse chatResponse = requestSpec.call().chatResponse();
             String content = chatResponse.getResult().getOutput().getText();
-            String modelName = hasImages ? "Agnes" : "DeepSeek";
-            // 只用用户原话保存历史，不含系统上下文
-            memoryManagerService.save(userId, finalText, content, modelName);
+            // 7. 持久化对话记忆
+            memoryManagerService.save(userId, finalText, content, hasImages ? "Agnes" : "DeepSeek");
+            compressIfNeeded(userId, chatResponse);
 
-            Usage usage = chatResponse.getMetadata().getUsage();
-            if (usage != null) {
-                int promptTokens = (int) usage.getPromptTokens();
-                memoryManagerService.compressIfNeeded(userId, promptTokens);
-            }
-
-            long elapsed = System.currentTimeMillis() - start;
-            String replyPreview = content != null ? (content.length() > 200 ? content.substring(0, 200) + "..." : content) : null;
-            log.info("[LLM] 请求完成: elapsed={}ms, userId={}, reply={}", elapsed, userId, replyPreview);
+            log.info("[LLM] 请求完成: elapsed={}ms, userId={}, reply={}",
+                    System.currentTimeMillis() - start, userId, abbrev(content, 200));
             return content;
+
         } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - start;
-            log.error("[LLM] 请求异常: elapsed={}ms, userId={}, text={}, error={}", elapsed, userId, textPreview, e.getMessage(), e);
+            log.error("[LLM] 请求异常: elapsed={}ms, userId={}, text={}, error={}",
+                    System.currentTimeMillis() - start, userId, abbrev(finalText, 100), e.getMessage(), e);
             throw e;
         }
     }
+
+    // ── 工具解析 ──────────────────────────────────────────────
+
     /**
-     * 将Skill转换成本次请求使用的系统消息。
+     * Skill 模式：只暴露 Skill 声明的工具白名单。
      */
-    private String buildSkillPrompt(
-            SkillDefinition skill) {
-
-        return """
-            当前请求已启用一个专业Skill。
-
-            Skill名称：%s
-            Skill描述：%s
-
-            请严格遵守下面的Skill执行流程、安全规则和输出要求。
-            不得虚构工具执行结果，不得跳过用户确认步骤。
-
-            ===== Skill执行说明 =====
-
-            %s
-
-            ===== Skill执行说明结束 =====
-            """.formatted(
-                skill.name(),
-                skill.description(),
-                skill.instructions()
-        );
+    private Object[] resolveSkillTools(SkillDefinition skill, String userId) {
+        ToolCallback[] tools = skillToolResolver.resolve(skill);
+        log.info("[LLM] 限制为Skill工具: userId={}, skill={}, toolCount={}",
+                userId, skill.name(), tools.length);
+        return (Object[]) tools;
     }
 
-    private static boolean looksLikeReminder(String text) {
-        if (text == null) return false;
-        if (text.startsWith("⏰ 定时提醒")) return false;
-        if (text.contains("提醒") || text.contains("取消") || text.contains("任务")) return true;
-        if (text.startsWith("每") && text.matches(".*[秒分钟时天].*")) return true;
-        return false;
+    /**
+     * 普通模式：暴露所有通用工具（含 RAG 知识库），但不包含猎聘工具。
+     * 猎聘工具只能通过 liepin-auto-apply Skill 使用。
+     */
+    private Object[] defaultTools() {
+        return new Object[]{
+                linkTools, weatherTools, imageTools, videoTools, voiceTools,
+                reminderTools, locationTools, calculatorTools, translateTools,
+                emailTools, documentTools, webSearchTools, knowledgeBaseTools
+        };
+    }
+
+    // ── 用户消息组装 ──────────────────────────────────────────
+
+    /**
+     * 将文本和图片列表组装到 user message 中。
+     * 图片以 base64 data URI 形式传入，由模型直接解析。
+     */
+    private void buildUserMessage(ChatClient.PromptUserSpec spec,
+                                   String text, List<String> imageUrls) {
+        if (text != null && !text.isBlank()) {
+            spec.text(text);
+        }
+        if (imageUrls != null) {
+            for (String url : imageUrls) {
+                spec.media(new Media(MimeTypeUtils.IMAGE_JPEG, URI.create(url)));
+            }
+        }
+    }
+
+    // ── Skill 提示词 ──────────────────────────────────────────
+
+    /**
+     * 将 Skill 的 Markdown 执行说明包装成 SystemMessage。
+     * 内容包括 Skill 名称、描述、执行流程、安全规则和输出要求。
+     */
+    private String buildSkillPrompt(SkillDefinition skill) {
+        return """
+                当前请求已启用一个专业Skill。
+
+                Skill名称：%s
+                Skill描述：%s
+
+                请严格遵守下面的Skill执行流程、安全规则和输出要求。
+                不得虚构工具执行结果，不得跳过用户确认步骤。
+
+                ===== Skill执行说明 =====
+
+                %s
+
+                ===== Skill执行说明结束 =====
+                """.formatted(skill.name(), skill.description(), skill.instructions());
+    }
+
+    // ── 辅助方法 ──────────────────────────────────────────────
+
+    /**
+     * 根据 token 使用量判断是否需要压缩对话历史。
+     */
+    private void compressIfNeeded(String userId, ChatResponse response) {
+        Usage usage = response.getMetadata().getUsage();
+        if (usage != null) {
+            memoryManagerService.compressIfNeeded(userId, (int) usage.getPromptTokens());
+        }
+    }
+
+    /**
+     * 截断过长文本用于日志输出。
+     */
+    private static String abbrev(String s, int maxLen) {
+        if (s == null) return null;
+        return s.length() > maxLen ? s.substring(0, maxLen) + "..." : s;
     }
 }

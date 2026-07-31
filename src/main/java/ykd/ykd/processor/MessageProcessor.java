@@ -17,7 +17,6 @@ import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.exception.GlobalExceptionHandler;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.task.ImageBatchManager;
-import ykd.ykd.task.ReminderTaskManager;
 import ykd.ykd.task.VideoTaskManager;
 
 import java.io.ByteArrayOutputStream;
@@ -61,14 +60,12 @@ public class MessageProcessor {
     private final ChatClient deepseekClient;
     private final ChatClient agnesClient;
     private final VideoTaskManager videoTaskManager;
-    private final ReminderTaskManager reminderTaskManager;
     private final ImageBatchManager imageBatchManager;
     private final UserContext userContext;
     private final DocumentParsingService documentParsingService;
     private final LiepinResumeService liepinResumeService;
     private final LiepinJobTaskManager liepinJobTaskManager;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
-    private final Queue<ProcessResult> completedReminders = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedLiepinTasks = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> voiceQueue;
@@ -77,7 +74,6 @@ public class MessageProcessor {
                             ChatClient deepseekClient,
                             ChatClient agnesClient,
                             VideoTaskManager videoTaskManager,
-                            ReminderTaskManager reminderTaskManager,
                             ImageBatchManager imageBatchManager,
                             UserContext userContext,
                             Queue<ProcessResult> voiceQueue,
@@ -88,7 +84,6 @@ public class MessageProcessor {
         this.deepseekClient = deepseekClient;
         this.agnesClient = agnesClient;
         this.videoTaskManager = videoTaskManager;
-        this.reminderTaskManager = reminderTaskManager;
         this.imageBatchManager = imageBatchManager;
         this.userContext = userContext;
         this.voiceQueue = voiceQueue;
@@ -103,7 +98,6 @@ public class MessageProcessor {
     @PostConstruct
     public void init() {
         videoTaskManager.setOnCompleted(completedVideos::add);
-        reminderTaskManager.setOnCompleted(completedReminders::add);
         imageBatchManager.setOnBatchReady(this::processImageBatch);
         liepinJobTaskManager.setOnCompleted(completedLiepinTasks::add);
     }
@@ -117,13 +111,6 @@ public class MessageProcessor {
      */
     public ProcessResult pollCompletedVideo() {
         return completedVideos.poll();
-    }
-
-    /**
-     * 拉取已到期的提醒结果（非阻塞）。
-     */
-    public ProcessResult pollCompletedReminder() {
-        return completedReminders.poll();
     }
 
     /**
