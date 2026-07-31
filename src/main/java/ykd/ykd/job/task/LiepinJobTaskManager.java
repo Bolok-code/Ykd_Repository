@@ -23,6 +23,33 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+/**
+ * 猎聘异步任务管理器。
+ *
+ * <p>所有浏览器操作必须串行化在单线程 "{@code liepin-job-worker}" 上执行，
+ * 因为 Playwright 的 {@code BrowserContext} 不支持跨线程共享。</p>
+ *
+ * <h3>架构</h3>
+ * <ul>
+ *   <li><b>单线程执行器</b> — 所有搜索、投递、计划扫描排队到同一个守护线程</li>
+ *   <li><b>自动扫描</b> — {@link LiepinCampaignScheduler} 每分钟触发，
+ *       通过 CAS 原子布尔 {@code automaticScanQueued} 防重复排队</li>
+ *   <li><b>取消机制</b> — 每个搜索任务有独立的 {@code AtomicBoolean}，
+ *       用户取消时设置标志，搜索过程中定期检查</li>
+ *   <li><b>登录恢复</b> — 检测到未登录时暂停计划为 {@code LOGIN_REQUIRED}，
+ *       下次扫描发现已登录后自动恢复为 {@code RUNNING}</li>
+ *   <li><b>结果推送</b> — 通过 {@code onCompleted} 回调将 {@link ProcessResult}
+ *       入队，由 {@code MessageProcessor} / {@code WeixinBotService} 推送给微信用户</li>
+ * </ul>
+ *
+ * <h3>手动搜索 vs 自动投递</h3>
+ * <table>
+ *   <tr><th></th><th>手动搜索</th><th>自动投递</th></tr>
+ *   <tr><td>入口</td><td>LLM → searchLiepinJobs</td><td>Scheduler → scanAutomaticCampaigns</td></tr>
+ *   <tr><td>流程</td><td>搜索 → AI匹配 → 等待确认 → 单个投递</td><td>搜索 → AI匹配 → 批量投递</td></tr>
+ *   <tr><td>结束状态</td><td>WAITING_CONFIRMATION</td><td>SUCCEEDED / FAILED</td></tr>
+ * </table>
+ */
 @Slf4j
 @Component
 public class LiepinJobTaskManager {
@@ -34,14 +61,24 @@ public class LiepinJobTaskManager {
     private final LiepinApplicationService applicationService;
     private final LiepinJobMatchService matchService;
     private final LiepinAutomationGateway browser;
+
+    /** 单线程执行器 — 串行化所有浏览器操作，防止 Playwright 线程冲突 */
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "liepin-job-worker");
         thread.setDaemon(true);
         return thread;
     });
+
+    /** 每个搜索任务独立的取消标志 */
     private final Map<Long, AtomicBoolean> cancellations = new ConcurrentHashMap<>();
+
+    /** CAS 原子布尔 — 防止自动扫描重复排队 */
     private final AtomicBoolean automaticScanQueued = new AtomicBoolean(false);
+
+    /** 跟踪是否已打开登录页，避免重复打开 */
     private final AtomicBoolean loginPageOpened = new AtomicBoolean(false);
+
+    /** 结果推送回调 — 将 ProcessResult 入队等待 wx-poll 发送 */
     private volatile Consumer<ProcessResult> onCompleted;
 
     public LiepinJobTaskManager(LiepinProperties properties,
@@ -62,20 +99,29 @@ public class LiepinJobTaskManager {
         this.browser = browser;
     }
 
+    /** 注册结果推送回调（由 MessageProcessor.init() 调用）。 */
     public void setOnCompleted(Consumer<ProcessResult> callback) {
         this.onCompleted = callback;
     }
 
+    // ── 公共 API ──────────────────────────────────────────────
+
+    /** 在工作线程上打开猎聘登录页面。 */
     public String openLogin() {
         return runOnLiepinWorker(browser::openLogin);
     }
 
+    /** 在工作线程上检查猎聘登录状态。 */
     public String loginStatus() {
         return runOnLiepinWorker(() -> browser.isLoggedIn()
                 ? "猎聘已登录，可以开始搜索岗位；暂停中的自动投递会在下一次扫描时恢复。"
                 : "猎聘尚未登录，请先打开登录页面完成登录。");
     }
 
+    /**
+     * 自动投递扫描入口（由 {@link LiepinCampaignScheduler} 每分钟调用）。
+     * CAS 保证同一时间只有一个扫描任务在队列中。
+     */
     public void scanAutomaticCampaigns() {
         if (!properties.isEnabled() || !properties.getAutoApply().isEnabled()) return;
         if (!automaticScanQueued.compareAndSet(false, true)) return;
@@ -90,13 +136,17 @@ public class LiepinJobTaskManager {
         });
     }
 
+    /**
+     * 手动搜索入口 — 创建任务、提交到工作线程。
+     * 搜索完成后 AI 匹配，结果推送候选列表给用户。
+     */
     public String startSearch(String userId, String keyword, String city,
                               Integer minSalaryK, Integer maxSalaryK, boolean excludeOutsourcing) {
         if (!properties.isEnabled()) {
             return "猎聘功能尚未启用，请先设置 LIEPIN_ENABLED=true 并重启项目。";
         }
         if (resumeService.find(userId) == null) {
-            return "还没有保存简历。请先在微信发送 PDF、Word 或文本简历，再说“把刚才的文件设为求职简历”。";
+            return "还没有保存简历。请先在微信发送 PDF、Word 或文本简历，再说\"把刚才的文件设为求职简历\"。";
         }
         LiepinJobTask task = createTask(userId, keyword, city, minSalaryK, maxSalaryK,
                 excludeOutsourcing, "等待后台搜索");
@@ -106,12 +156,17 @@ public class LiepinJobTaskManager {
         return "已创建猎聘岗位搜索任务 #" + task.getId() + "，后台会搜索并用简历匹配。完成后机器人会主动把候选岗位发给你。";
     }
 
+    /** 列出最新搜索任务的候选职位列表。 */
     public String listLatestCandidates(String userId) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
         if (task == null) return "暂无猎聘求职任务。";
         return formatCandidates(task, postingMapper.findByTaskId(task.getId()));
     }
 
+    /**
+     * 确认投递候选列表中的某个职位。
+     * 提交单个职位的申请到工作线程，发起"聊一聊"沟通。
+     */
     public String confirmApplication(String userId, int candidateIndex) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
         if (task == null) return "暂无可确认的猎聘求职任务。";
@@ -130,6 +185,7 @@ public class LiepinJobTaskManager {
         return "已确认候选岗位 " + candidateIndex + "，后台正在打开猎聘并发起沟通。结果会主动通知你。";
     }
 
+    /** 取消最新搜索任务。 */
     public String cancelLatest(String userId) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
         if (task == null) return "暂无可取消的猎聘求职任务。";
@@ -139,6 +195,7 @@ public class LiepinJobTaskManager {
         return "已取消猎聘求职任务 #" + task.getId() + "。";
     }
 
+    /** 查询最新任务状态。 */
     public String latestStatus(String userId) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
         return task == null ? "暂无猎聘求职任务。"
@@ -150,6 +207,17 @@ public class LiepinJobTaskManager {
         executor.shutdownNow();
     }
 
+    // ── 自动投递扫描 ────────────────────────────────────────
+
+    /**
+     * 执行一次完整的自动投递扫描。
+     * <ol>
+     *   <li>查询到期 RUNNING 计划和 LOGIN_REQUIRED 计划</li>
+     *   <li>检查登录状态</li>
+     *   <li>未登录 → 暂停所有到期计划，打开登录页</li>
+     *   <li>已登录 → 恢复 LOGIN_REQUIRED 计划，逐个执行到期计划</li>
+     * </ol>
+     */
     private void runAutomaticCampaignScan() {
         List<LiepinJobCampaign> due = campaignMapper.findDueRunning();
         List<LiepinJobCampaign> waitingLogin = campaignMapper.findLoginRequired();
@@ -177,13 +245,24 @@ public class LiepinJobTaskManager {
         loginPageOpened.set(false);
         for (LiepinJobCampaign campaign : waitingLogin) {
             campaignMapper.start(campaign.getId(), campaign.getUserId(), "登录已恢复，自动投递计划继续运行");
-            notifyUser(campaign.getUserId(), "猎聘登录已恢复，自动投递计划 #" + campaign.getId() + " 将继续执行。 ");
+            notifyUser(campaign.getUserId(), "猎聘登录已恢复，自动投递计划 #" + campaign.getId() + " 将继续执行。");
         }
         for (LiepinJobCampaign campaign : campaignMapper.findDueRunning()) {
             runCampaign(campaign);
         }
     }
 
+    /**
+     * 执行单个自动投递计划的本次迭代。
+     * <ol>
+     *   <li>重新加载计划（可能已被暂停）</li>
+     *   <li>计算剩余投递额度</li>
+     *   <li>搜索 → AI 匹配 → 逐个投递（去重、排除关键词、最低分过滤）</li>
+     *   <li>遇到阻断性错误（登录过期/风控）立即暂停计划</li>
+     *   <li>连续失败达阈值 → 自动暂停</li>
+     *   <li>回写执行结果，设置下次执行时间</li>
+     * </ol>
+     */
     private void runCampaign(LiepinJobCampaign campaign) {
         LiepinJobCampaign latest = campaignMapper.findById(campaign.getId());
         if (latest == null || !LiepinCampaignStatus.RUNNING.name().equals(latest.getStatus())) return;
@@ -285,16 +364,19 @@ public class LiepinJobTaskManager {
         }
     }
 
+    /** 因登录失效暂停计划。 */
     private void pauseForLogin(LiepinJobCampaign campaign) {
         pauseCampaign(campaign, LiepinCampaignStatus.LOGIN_REQUIRED,
                 "猎聘登录已失效，完成登录后系统会自动恢复计划");
     }
 
+    /** 暂停计划并通知用户。 */
     private void pauseCampaign(LiepinJobCampaign campaign, LiepinCampaignStatus status, String message) {
         campaignMapper.updateStatus(campaign.getId(), campaign.getUserId(), status.name(), message);
         notifyUser(campaign.getUserId(), "猎聘自动投递计划 #" + campaign.getId() + " 已暂停：" + message);
     }
 
+    /** 检查职位是否命中用户设定的排除关键词。 */
     private boolean containsExcludedKeyword(LiepinJobPosting posting, String rawKeywords) {
         if (rawKeywords == null || rawKeywords.isBlank()) return false;
         String source = String.join(" ", value(posting.getJobName()), value(posting.getCompanyName()),
@@ -303,6 +385,12 @@ public class LiepinJobTaskManager {
                 .map(String::strip).filter(value -> !value.isBlank()).anyMatch(source::contains);
     }
 
+    // ── 手动搜索执行 ────────────────────────────────────────
+
+    /**
+     * 执行手动搜索任务。
+     * 搜索 → AI 匹配所有职位 → 推送候选列表 → 状态设为 WAITING_CONFIRMATION。
+     */
     private void runSearch(LiepinJobTask task, AtomicBoolean cancelled) {
         try {
             update(task, LiepinTaskStatus.SEARCHING, "正在猎聘搜索岗位");
@@ -315,7 +403,7 @@ public class LiepinJobTaskManager {
             }
             if (jobs.isEmpty()) {
                 update(task, LiepinTaskStatus.FAILED, "没有找到符合筛选条件的岗位");
-                notifyUser(task.getUserId(), "猎聘任务 #" + task.getId() + " 没有找到符合条件的岗位，可尝试放宽城市、薪资或外包筛选。 ");
+                notifyUser(task.getUserId(), "猎聘任务 #" + task.getId() + " 没有找到符合条件的岗位，可尝试放宽城市、薪资或外包筛选。");
                 return;
             }
             update(task, LiepinTaskStatus.ANALYZING, "正在使用 DeepSeek 匹配简历与岗位");
@@ -344,6 +432,7 @@ public class LiepinJobTaskManager {
         }
     }
 
+    /** 执行单个职位的申请（仅发送招呼语，不发送简历）。 */
     private void runApplication(LiepinJobTask task, LiepinJobPosting posting) {
         try {
             LiepinApplicationResult result = browser.apply(posting, posting.getGreeting());
@@ -368,6 +457,9 @@ public class LiepinJobTaskManager {
         }
     }
 
+    // ── 辅助方法 ──────────────────────────────────────────────
+
+    /** 创建搜索任务并写入数据库。 */
     private LiepinJobTask createTask(String userId, String keyword, String city,
                                      Integer minSalaryK, Integer maxSalaryK,
                                      boolean excludeOutsourcing, String message) {
@@ -384,6 +476,7 @@ public class LiepinJobTaskManager {
         return task;
     }
 
+    /** 格式化候选职位列表为展示文本。 */
     private String formatCandidates(LiepinJobTask task, List<LiepinJobPosting> jobs) {
         StringBuilder text = new StringBuilder("猎聘候选岗位（任务 #").append(task.getId()).append("）\n");
         if (jobs.isEmpty()) return text.append("暂无候选岗位，当前状态：").append(task.getStatus()).toString();
@@ -394,15 +487,17 @@ public class LiepinJobTaskManager {
                     .append("｜").append(job.getSalary()).append("｜匹配 ").append(job.getMatchScore()).append(" 分\n")
                     .append("   ").append(job.getMatchReason()).append("\n");
         }
-        return text.append("回复例如“确认投递第1个岗位”，系统才会打开页面并发送沟通语。每次只提交一个岗位。").toString();
+        return text.append("回复例如\"确认投递第1个岗位\"，系统才会打开页面并发送沟通语。每次只提交一个岗位。").toString();
     }
 
+    /** 更新任务状态（内存 + 数据库）。 */
     private void update(LiepinJobTask task, LiepinTaskStatus status, String message) {
         task.setStatus(status.name());
         task.setMessage(message);
         taskMapper.updateStatus(task.getId(), task.getUserId(), status.name(), message);
     }
 
+    /** 通过回调将消息推送给微信用户。 */
     private void notifyUser(String userId, String message) {
         Consumer<ProcessResult> callback = onCompleted;
         if (callback == null) {
@@ -412,10 +507,12 @@ public class LiepinJobTaskManager {
         callback.accept(ProcessResult.text(message, userId));
     }
 
+    /** null 或 <=0 的薪资转为 null（表示不限制）。 */
     private Integer normalizeSalary(Integer salary) {
         return salary == null || salary <= 0 ? null : salary;
     }
 
+    /** 异常消息兜底。 */
     private String friendlyError(Exception e) {
         return e.getMessage() == null || e.getMessage().isBlank() ? "未知错误，请查看日志" : e.getMessage();
     }
@@ -424,6 +521,11 @@ public class LiepinJobTaskManager {
         return value == null ? "" : value;
     }
 
+    /**
+     * 确保操作在 liepin-job-worker 线程上执行。
+     * 如果当前已在该线程上则直接调用，否则提交 Future 并阻塞等待结果。
+     * 这样可以安全地从其他线程（如 LLM 调用线程）发起浏览器操作。
+     */
     private <T> T runOnLiepinWorker(Callable<T> operation) {
         if ("liepin-job-worker".equals(Thread.currentThread().getName())) {
             try {
