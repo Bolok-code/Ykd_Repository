@@ -9,6 +9,35 @@ import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.llm.tools.DocumentTools;
 import ykd.ykd.processor.UserContext;
 
+/**
+ * 猎聘求职工具的 Spring AI {@code @Tool} 集合。
+ *
+ * <p>14 个工具方法覆盖了完整的猎聘求职流程：
+ * 登录 → 保存简历 → 搜索岗位 → AI 匹配 → 候选确认 → 创建/管理自动投递计划。
+ *
+ * <p>这些工具仅在 {@code liepin-auto-apply} Skill 激活时暴露给 LLM，
+ * 普通聊天场景下 LLM 看不到这些方法（不会被误调）。
+ *
+ * <h3>工具分组</h3>
+ * <ul>
+ *   <li><b>登录</b> — openLiepinLogin、checkLiepinLoginStatus</li>
+ *   <li><b>简历</b> — saveCurrentDocumentAsLiepinResume</li>
+ *   <li><b>手动搜索</b> — searchLiepinJobs、listLiepinJobCandidates、
+ *       confirmLiepinJobApplication、getLiepinJobTaskStatus、cancelLiepinJobTask</li>
+ *   <li><b>自动投递</b> — createLiepinAutoApplyCampaign、startLiepinAutoApplyCampaign、
+ *       pauseLiepinAutoApplyCampaign、stopLiepinAutoApplyCampaign、
+ *       getLiepinAutoApplyCampaignStatus、listLiepinAutoApplications</li>
+ * </ul>
+ *
+ * <h3>安全约束（在 SKILL.md 中定义）</h3>
+ * 以下规则通过 Skill 执行说明注入 LLM，不在代码层强制：
+ * <ul>
+ *   <li>未经用户明确确认，不得启动自动投递</li>
+ *   <li>"好的""知道了"等模糊表达不得视为启动授权</li>
+ *   <li>不得绕过验证码、登录验证和平台风控</li>
+ *   <li>工具返回失败时应如实告知，不得虚构成功</li>
+ * </ul>
+ */
 @Component
 public class LiepinJobTools {
     private final UserContext userContext;
@@ -26,6 +55,8 @@ public class LiepinJobTools {
         this.taskManager = taskManager;
     }
 
+    // ── 登录 ──────────────────────────────────────────────────
+
     @Tool(description = "打开猎聘登录页面。仅当用户明确要求登录猎聘、打开猎聘登录页或登录状态失效时调用。")
     public String openLiepinLogin() {
         return taskManager.openLogin();
@@ -35,6 +66,8 @@ public class LiepinJobTools {
     public String checkLiepinLoginStatus() {
         return taskManager.loginStatus();
     }
+
+    // ── 简历 ──────────────────────────────────────────────────
 
     @Tool(description = "把用户刚才发送并解析的PDF或Word文件保存为猎聘求职简历，同时保留原文件用于附件投递。用户明确说这是简历或要求设为求职简历时调用。")
     public String saveCurrentDocumentAsLiepinResume() {
@@ -47,10 +80,12 @@ public class LiepinJobTools {
         }
         resumeService.save(userId, fileName, content, originalBytes);
         boolean attachmentAvailable = resumeService.find(userId).getFilePath() != null;
-        return "已把“" + fileName + "”保存为当前猎聘求职简历。"
+        return "已把\"" + fileName + "\"保存为当前猎聘求职简历。"
                 + (attachmentAvailable ? "已保留原文件，可选择在线简历或附件简历投递。"
-                : "已保存文本内容，但附件投递需要重新发送PDF、DOC或DOCX文件。 ");
+                : "已保存文本内容，但附件投递需要重新发送PDF、DOC或DOCX文件。");
     }
+
+    // ── 手动搜索 ──────────────────────────────────────────────
 
     @Tool(description = "创建猎聘岗位搜索与简历匹配任务。任务后台执行，完成后主动推送候选岗位；该工具不会自动发送简历。")
     public String searchLiepinJobs(
@@ -61,6 +96,29 @@ public class LiepinJobTools {
             @ToolParam(description = "是否排除外包、人力资源、劳务派遣和驻场岗位") boolean excludeOutsourcing) {
         return taskManager.startSearch(requireUserId(), keyword, city, minSalaryK, maxSalaryK, excludeOutsourcing);
     }
+
+    @Tool(description = "查看当前用户最近一次猎聘求职任务的候选岗位。")
+    public String listLiepinJobCandidates() {
+        return taskManager.listLatestCandidates(requireUserId());
+    }
+
+    @Tool(description = "用户明确确认某个猎聘候选岗位后，打开该单个岗位并点击聊一聊。未经用户明确确认不得调用。")
+    public String confirmLiepinJobApplication(
+            @ToolParam(description = "候选列表中的序号，从1开始") int candidateIndex) {
+        return taskManager.confirmApplication(requireUserId(), candidateIndex);
+    }
+
+    @Tool(description = "查看当前用户最近一次猎聘求职任务状态。")
+    public String getLiepinJobTaskStatus() {
+        return taskManager.latestStatus(requireUserId());
+    }
+
+    @Tool(description = "取消当前用户最近一次猎聘求职任务。")
+    public String cancelLiepinJobTask() {
+        return taskManager.cancelLatest(requireUserId());
+    }
+
+    // ── 自动投递 ──────────────────────────────────────────────
 
     @Tool(description = "创建猎聘全自动投递计划，但创建后不会立即运行，必须再由用户明确要求启动。计划会按匹配分数、每日限额、去重和间隔执行。")
     public String createLiepinAutoApplyCampaign(
@@ -106,27 +164,9 @@ public class LiepinJobTools {
         return campaignService.latestApplications(requireUserId());
     }
 
-    @Tool(description = "查看当前用户最近一次猎聘求职任务的候选岗位。")
-    public String listLiepinJobCandidates() {
-        return taskManager.listLatestCandidates(requireUserId());
-    }
+    // ── 内部辅助 ──────────────────────────────────────────────
 
-    @Tool(description = "用户明确确认某个猎聘候选岗位后，打开该单个岗位并点击聊一聊。未经用户明确确认不得调用。")
-    public String confirmLiepinJobApplication(
-            @ToolParam(description = "候选列表中的序号，从1开始") int candidateIndex) {
-        return taskManager.confirmApplication(requireUserId(), candidateIndex);
-    }
-
-    @Tool(description = "查看当前用户最近一次猎聘求职任务状态。")
-    public String getLiepinJobTaskStatus() {
-        return taskManager.latestStatus(requireUserId());
-    }
-
-    @Tool(description = "取消当前用户最近一次猎聘求职任务。")
-    public String cancelLiepinJobTask() {
-        return taskManager.cancelLatest(requireUserId());
-    }
-
+    /** 从 ThreadLocal 获取当前微信用户 ID。 */
     private String requireUserId() {
         String userId = userContext.getCurrentUserId();
         if (userId == null || userId.isBlank()) throw new IllegalStateException("无法识别当前微信用户");
