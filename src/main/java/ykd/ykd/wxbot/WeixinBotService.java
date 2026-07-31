@@ -7,6 +7,7 @@ import com.github.wechat.ilink.sdk.core.exception.SessionExpiredException;
 import com.github.wechat.ilink.sdk.core.listener.OnLoginListener;
 import com.github.wechat.ilink.sdk.core.login.LoginContext;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
+import org.springframework.context.annotation.Lazy;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,7 @@ import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
 import ykd.ykd.processor.ProcessResult;
+import ykd.ykd.task.UnifiedReminderManager;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +50,7 @@ public class WeixinBotService {
     private final ObjectMapper objectMapper;
     private final PerUserTaskDispatcher dispatcher;
     private final ApplicationEventPublisher eventPublisher;
+    private final UnifiedReminderManager reminderManager;
 
     private ILinkClient client;
     private volatile boolean running = true;
@@ -57,11 +60,13 @@ public class WeixinBotService {
     private final CountDownLatch loginReady = new CountDownLatch(1);
 
     public WeixinBotService(MessageProcessor messageProcessor, MemoryManagerService memoryManagerService,
-                            ObjectMapper objectMapper, ApplicationEventPublisher eventPublisher) {
+                            ObjectMapper objectMapper, ApplicationEventPublisher eventPublisher,
+                            @Lazy UnifiedReminderManager reminderManager) {
         this.messageProcessor = messageProcessor;
         this.memoryManagerService = memoryManagerService;
         this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
+        this.reminderManager = reminderManager;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
 
@@ -235,6 +240,24 @@ public class WeixinBotService {
         safeSendText(userId, text);
     }
 
+    /**
+     * 发送文本并返回是否成功，失败时打日志不抛异常。
+     */
+    public boolean sendTextWithResult(String userId, String text) {
+        try {
+            client.sendText(userId, text);
+            lastSendTime.put(userId, System.currentTimeMillis());
+            return true;
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("prepare failed")) {
+                log.warn("[Bot] 协议过期: userId={}", userId);
+            } else {
+                log.error("[Bot] 发送文本失败: userId={}", userId, e);
+            }
+            return false;
+        }
+    }
+
     private void safeSendImage(String userId, byte[] imageData) {
         try {
             client.sendImage(userId, imageData, "image.png", "");
@@ -364,6 +387,8 @@ public class WeixinBotService {
                         if (messages != null) {
                             for (WeixinMessage message : messages) {
                                 handleMessage(message);
+                                // 收到用户消息后恢复暂停的定时任务（新 token 已就绪）
+                                reminderManager.resumeAllForUser(message.getFrom_user_id());
                             }
                         }
 
