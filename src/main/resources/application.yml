@@ -13,6 +13,12 @@ spring:
       chat:
         options:
           model: agnes-2.0-flash
+      embedding:
+        enabled: true
+        api-key: changeme
+        base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        options:
+          model: text-embedding-v3
     deepseek:
       api-key: changeme
       base-url: https://api.deepseek.com
@@ -67,3 +73,10 @@ liepin:
 mybatis:
   configuration:
     map-underscore-to-camel-case: true
+rag:
+  enabled: true
+  chunk-size: 600
+  chunk-overlap: 100
+  top-k: 5
+  max-context-chars: 6000
+  similarity-threshold: 0.0

@@ -14,6 +14,7 @@ import org.springframework.util.MimeTypeUtils;
 import ykd.ykd.llm.tools.*;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
+import ykd.ykd.rag.tools.KnowledgeBaseTools;
 import ykd.ykd.skill.model.SkillDefinition;
 import ykd.ykd.skill.selector.SkillSelector;
 import ykd.ykd.skill.tool.SkillToolResolver;
@@ -31,14 +32,15 @@ import java.util.Optional;
  *   <li>文本预处理（空格消息、图片兜底文案）</li>
  *   <li>提醒拦截 — 正则匹配提醒请求，直接调工具，绕过 LLM 避免幻觉</li>
  *   <li>Skill 匹配 — 关键词命中时加载对应 Skill，限制工具集</li>
- *   <li>加载对话历史，注入 Skill 提示词（如果有）</li>
- *   <li>注册工具集（Skill 工具 or 通用工具）</li>
+ *   <li>加载对话历史，注入系统上下文（文档内容等）</li>
+ *   <li>注入 Skill 提示词（如果有）</li>
+ *   <li>注册工具集（Skill 工具 or 通用工具（含 RAG 知识库））</li>
  *   <li>调用 LLM，保存对话记忆，触发压缩检查</li>
  * </ol>
  *
  * <h3>工具隔离</h3>
  * 命中 Skill 时 LLM 只能看到该 Skill 声明的工具白名单；
- * 未命中时暴露通用工具但不暴露猎聘工具。
+ * 未命中时暴露通用工具（含 RAG 知识库）但不暴露猎聘工具。
  * 猎聘工具只能在 liepin-auto-apply Skill 激活时使用。
  */
 @Slf4j
@@ -63,6 +65,7 @@ public class LlmServiceImpl implements LlmService {
     private final TranslateTools translateTools;
     private final EmailTools emailTools;
     private final DocumentTools documentTools;
+    private final KnowledgeBaseTools knowledgeBaseTools;
 
     /**
      * 处理用户消息，返回 LLM 回复。
@@ -75,6 +78,11 @@ public class LlmServiceImpl implements LlmService {
      */
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId) {
+        return chat(text, imageUrls, client, userId, null);
+    }
+
+    @Override
+    public String chat(String text, List<String> imageUrls, ChatClient client, String userId, String systemContext) {
         long start = System.currentTimeMillis();
         boolean hasImages = imageUrls != null && !imageUrls.isEmpty();
 
@@ -94,14 +102,21 @@ public class LlmServiceImpl implements LlmService {
         try {
             // 1. 加载当前用户的对话历史
             List<Message> history = memoryManagerService.getHistory(userId);
-
             // 2. Skill 匹配（图片消息不匹配 Skill，走视觉模型独立处理）
+            //    Skill 路由仅使用 finalText（用户原话），不包含系统上下文，
+            //    避免文档内容中的关键词误触发 Skill。
             Optional<SkillDefinition> selectedSkill = hasImages
                     ? Optional.empty()
                     : skillSelector.select(finalText);
 
             // 3. 构建请求消息列表（复制历史，避免 Skill 提示词被写入长期记忆）
             List<Message> requestMessages = new ArrayList<>(history);
+
+            // 3a. 注入系统上下文（文档内容等），让 LLM 在回复时参考
+            if (systemContext != null && !systemContext.isBlank()) {
+                requestMessages.add(new SystemMessage(systemContext));
+                log.debug("[LLM] 已注入系统上下文: length={}", systemContext.length());
+            }
             selectedSkill.ifPresent(skill -> {
                 requestMessages.add(0, new SystemMessage(buildSkillPrompt(skill)));
                 log.info("[LLM] 启用Skill: userId={}, skill={}, tools={}",
@@ -121,7 +136,6 @@ public class LlmServiceImpl implements LlmService {
             // 6. 调用 LLM
             ChatResponse chatResponse = requestSpec.call().chatResponse();
             String content = chatResponse.getResult().getOutput().getText();
-
             // 7. 持久化对话记忆
             memoryManagerService.save(userId, finalText, content, hasImages ? "Agnes" : "DeepSeek");
             compressIfNeeded(userId, chatResponse);
@@ -150,14 +164,14 @@ public class LlmServiceImpl implements LlmService {
     }
 
     /**
-     * 普通模式：暴露所有通用工具，但不包含猎聘工具。
+     * 普通模式：暴露所有通用工具（含 RAG 知识库），但不包含猎聘工具。
      * 猎聘工具只能通过 liepin-auto-apply Skill 使用。
      */
     private Object[] defaultTools() {
         return new Object[]{
                 linkTools, weatherTools, imageTools, videoTools, voiceTools,
                 reminderTools, locationTools, calculatorTools, translateTools,
-                emailTools, documentTools, webSearchTools
+                emailTools, documentTools, webSearchTools, knowledgeBaseTools
         };
     }
 
