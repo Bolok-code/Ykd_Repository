@@ -42,23 +42,29 @@ public class EmbeddingService {
         
         try {
             EmbeddingResponse response = embeddingModel.embedForResponse(List.of(text));
-            
+
             if (response == null || response.getResults().isEmpty()) {
                 log.error("[Embedding] 模型返回空结果");
-                return "[]";
+                throw new IllegalStateException("Embedding 模型返回空结果");
             }
-            
+
             float[] vector = response.getResults().get(0).getOutput();
+
+            if (vector == null || vector.length == 0) {
+                log.error("[Embedding] 返回的向量为空");
+                throw new IllegalStateException("Embedding 返回的向量为空");
+            }
+
             String vectorJson = floatArrayToJson(vector);
-            
-            log.debug("[Embedding] 文本向量化完成: textLength={}, vectorDim={}", 
+
+            log.debug("[Embedding] 文本向量化完成: textLength={}, vectorDim={}",
                     text.length(), vector.length);
-            
+
             return vectorJson;
-            
+
         } catch (Exception e) {
             log.error("[Embedding] 向量化失败: {}", e.getMessage(), e);
-            return "[]";
+            throw new RuntimeException("向量化失败: " + e.getMessage(), e);
         }
     }
     
@@ -85,30 +91,35 @@ public class EmbeddingService {
         
         try {
             log.info("[Embedding] 批量向量化开始: count={}", validTexts.size());
-            
+
             EmbeddingResponse response = embeddingModel.embedForResponse(validTexts);
-            
+
             if (response == null || response.getResults().isEmpty()) {
                 log.error("[Embedding] 批量向量化返回空结果");
-                return validTexts.stream().map(t -> "[]").toList();
+                throw new IllegalStateException("Embedding 批量向量化返回空结果");
             }
-            
+
             List<String> vectorJsonList = new ArrayList<>();
             for (int i = 0; i < response.getResults().size(); i++) {
                 float[] vector = response.getResults().get(i).getOutput();
+
+                if (vector == null || vector.length == 0) {
+                    log.error("[Embedding] 批量向量化中第 {} 个向量为空", i);
+                    throw new IllegalStateException("Embedding 第 " + i + " 个向量为空");
+                }
+
                 vectorJsonList.add(floatArrayToJson(vector));
             }
-            
-            log.info("[Embedding] 批量向量化完成: count={}, vectorDim={}", 
-                    vectorJsonList.size(), 
+
+            log.info("[Embedding] 批量向量化完成: count={}, vectorDim={}",
+                    vectorJsonList.size(),
                     response.getResults().get(0).getOutput().length);
-            
+
             return vectorJsonList;
-            
+
         } catch (Exception e) {
             log.error("[Embedding] 批量向量化失败: {}", e.getMessage(), e);
-            // 返回空向量列表
-            return validTexts.stream().map(t -> "[]").toList();
+            throw new RuntimeException("批量向量化失败: " + e.getMessage(), e);
         }
     }
     
