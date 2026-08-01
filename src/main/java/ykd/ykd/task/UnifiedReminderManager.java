@@ -91,7 +91,7 @@ public class UnifiedReminderManager {
     }
 
     @EventListener(LoginReadyEvent.class)
-    public void onLoginReady() {
+    public void onLoginReady(LoginReadyEvent event) {
         recover();
     }
 

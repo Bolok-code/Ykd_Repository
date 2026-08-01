@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -6,15 +6,12 @@
     <title>YKD Bot 管理</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
-        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; width: 380px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding-top: 40px; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; width: 420px; }
         h1 { font-size: 20px; text-align: center; margin-bottom: 24px; color: #333; }
         .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; transition: all 0.2s; margin-bottom: 8px; }
         .btn-primary { background: #4a90d9; color: #fff; }
         .btn-primary:hover { background: #3a7bc8; }
-        .btn-danger { background: #e74c3c; color: #fff; }
-        .btn-danger:hover { background: #c0392b; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .status { text-align: center; padding: 8px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
         .status-ok { background: #d4edda; color: #155724; }
         .status-off { background: #f8d7da; color: #721c24; }
@@ -22,18 +19,28 @@
         #qrArea { text-align: center; margin-top: 12px; }
         #qrArea img { max-width: 200px; border: 1px solid #eee; border-radius: 8px; }
         #qrArea a { color: #4a90d9; font-size: 13px; word-break: break-all; }
+        .session-list { margin-bottom: 16px; }
+        .session-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+        .session-item .name { font-weight: 500; color: #333; }
+        .session-item .online { color: #27ae60; font-size: 12px; }
+        .session-item .pending { color: #e67e22; font-size: 12px; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; border: none; cursor: pointer; }
+        .btn-sm-danger { background: #e74c3c; color: #fff; }
+        .btn-sm-danger:hover { background: #c0392b; }
+        .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>YKD Bot 管理面板</h1>
 
-        <div id="statusBar" class="status status-off">未连接</div>
+        <div id="statusBar" class="status status-off">加载中...</div>
 
-        <div>
-            <button class="btn btn-primary" id="btnLogin" onclick="doLogin()">扫码登录</button>
-            <button class="btn btn-danger" id="btnDisconnect" onclick="doDisconnect()" disabled>断开连接</button>
-        </div>
+        <div id="sessionList" class="session-list"></div>
+
+        <hr class="divider">
+
+        <button class="btn btn-primary" onclick="doLogin()">扫码登录新账号</button>
 
         <div class="msg" id="msg"></div>
         <div id="qrArea"></div>
@@ -52,29 +59,39 @@
             try {
                 const s = await api('bot/status');
                 const bar = document.getElementById('statusBar');
-                const btnLogin = document.getElementById('btnLogin');
-                const btnDisc = document.getElementById('btnDisconnect');
-                if (s.connected) {
+                const list = document.getElementById('sessionList');
+                const online = s.botUsers || [];
+                const pending = s.pendingUsers || [];
+
+                let html = '';
+                online.forEach(uid => {
+                    html += '<div class="session-item">' +
+                        '<span><span class="name">' + uid + '</span> <span class="online">● 在线</span></span>' +
+                        '<button class="btn-sm btn-sm-danger" onclick="doDisconnect(\'' + uid + '\')">断开</button></div>';
+                });
+                pending.forEach(uid => {
+                    html += '<div class="session-item">' +
+                        '<span><span class="name">' + uid + '</span> <span class="pending">● 等待扫码</span></span>' +
+                        '<button class="btn-sm btn-sm-danger" onclick="doDisconnect(\'' + uid + '\')">取消</button></div>';
+                });
+                list.innerHTML = html;
+
+                const total = online.length + pending.length;
+                if (total > 0) {
                     bar.className = 'status status-ok';
-                    bar.textContent = '已连接（Session 已保存）';
-                    btnLogin.disabled = true;
-                    btnDisc.disabled = false;
+                    bar.textContent = '在线 ' + online.length + ' 个' + (pending.length > 0 ? '，等待扫码 ' + pending.length + ' 个' : '');
                 } else {
                     bar.className = 'status status-off';
                     bar.textContent = '未连接';
-                    btnLogin.disabled = false;
-                    btnDisc.disabled = true;
                 }
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) { console.error(e); }
         }
 
         async function doLogin() {
             showMsg('正在登录...');
             document.getElementById('qrArea').innerHTML = '';
             try {
-                const r = await api('bot/login');
+                const r = await api('bot/login', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
                 if (r.success && r.qrUrl) {
                     showMsg('请扫描二维码登录');
                     document.getElementById('qrArea').innerHTML =
@@ -83,30 +100,24 @@
                         '<br><a href="' + r.qrUrl + '" target="_blank">链接直连</a>';
                 } else if (r.success) {
                     showMsg(r.message || '登录成功');
-                    document.getElementById('qrArea').innerHTML = '';
                 } else {
                     showMsg(r.message, true);
                 }
-                setTimeout(refreshStatus, 3000);
-            } catch (e) {
-                showMsg('登录请求失败: ' + e.message, true);
-            }
+                refreshStatus();
+            } catch (e) { showMsg('登录请求失败: ' + e.message, true); }
         }
 
-        async function doDisconnect() {
-            if (!confirm('确定断开连接？')) return;
+        async function doDisconnect(botUserId) {
+            if (!confirm('确定断开 ' + botUserId + ' ？')) return;
             try {
-                const r = await api('bot/disconnect', {method: 'POST'});
+                const r = await api('bot/disconnect?botUserId=' + encodeURIComponent(botUserId), { method: 'POST' });
                 showMsg(r.message, !r.success);
-                document.getElementById('qrArea').innerHTML = '';
                 refreshStatus();
-            } catch (e) {
-                showMsg('断开失败: ' + e.message, true);
-            }
+            } catch (e) { showMsg('断开失败: ' + e.message, true); }
         }
 
         refreshStatus();
-        setInterval(refreshStatus, 10000);
+        setInterval(refreshStatus, 5000);
     </script>
 </body>
 </html>

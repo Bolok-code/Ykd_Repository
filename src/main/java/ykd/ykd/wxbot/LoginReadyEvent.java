@@ -1,3 +1,3 @@
 package ykd.ykd.wxbot;
 
-public record LoginReadyEvent() {}
+public record LoginReadyEvent(String botUserId) {}
