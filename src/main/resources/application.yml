@@ -82,4 +82,4 @@ rag:
   max-num-chunks: 100
   top-k: 5
   max-context-chars: 6000
-  similarity-threshold: 0.0
+  similarity-threshold: 0.3

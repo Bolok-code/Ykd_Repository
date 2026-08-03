@@ -42,10 +42,10 @@ public class RagProperties {
     private int maxContextChars = 6000;
 
     /**
-     * 相似度最低阈值。
-     * 第一版先设为 0，等接入真实 Embedding 模型后再调整。
+     * 相似度最低阈值。低于此值的结果不会出现在检索上下文中。
+     * 0.3 是 text-embedding-v3 经验起步值，后续根据 Top-5 分数日志调整。
      */
-    private double similarityThreshold = 0.0;
+    private double similarityThreshold = 0.3;
 
     /**
      * Embedding 批量请求时每次最多发送多少条文本。

@@ -21,6 +21,8 @@ import java.util.List;
 @Service
 public class EmbeddingService {
 
+    private static final int DEFAULT_EMBED_BATCH_SIZE = 10;
+
     private final EmbeddingModel embeddingModel;
     private final ObjectMapper objectMapper;
     private final RagProperties ragProperties;
@@ -95,7 +97,9 @@ public class EmbeddingService {
 
         int batchSize = ragProperties.getEmbedBatchSize();
         if (batchSize <= 0) {
-            batchSize = 25;
+            batchSize = DEFAULT_EMBED_BATCH_SIZE;
+            log.warn("[Embedding] rag.embed-batch-size 配置无效 ({}), 使用默认值 {}",
+                    ragProperties.getEmbedBatchSize(), DEFAULT_EMBED_BATCH_SIZE);
         }
 
         log.info("[Embedding] 批量向量化开始: totalCount={}, batchSize={}", validTexts.size(), batchSize);
