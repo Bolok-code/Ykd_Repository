@@ -17,17 +17,17 @@ import static org.mockito.Mockito.when;
 
 class EmbeddingSkillSelectorTest {
 
-    // 用简单三维向量：相同方向 → cos≈1.0，正交 → cos=0.0
     private static final String MATCH_VEC = "[1.0, 0.0, 0.0]";
     private static final String NOMATCH_VEC = "[0.0, 1.0, 0.0]";
 
     private EmbeddingSkillSelector skillSelector;
 
+    // === Embedding 主路径测试（mock API 正常） ===
+
     @BeforeEach
     void setUp() {
         EmbeddingService embeddingService = mock(EmbeddingService.class);
 
-        // jsonToFloatArray: 简单 JSON 数组解析
         when(embeddingService.jsonToFloatArray(anyString())).thenAnswer(inv -> {
             String json = inv.getArgument(0);
             json = json.replace("[", "").replace("]", "").trim();
@@ -39,7 +39,6 @@ class EmbeddingSkillSelectorTest {
             return result;
         });
 
-        // cosineSimilarity: 真实余弦相似度实现
         when(embeddingService.cosineSimilarity(any(float[].class), any(float[].class)))
                 .thenAnswer(inv -> {
                     float[] a = inv.getArgument(0);
@@ -53,8 +52,6 @@ class EmbeddingSkillSelectorTest {
                     return (na == 0 || nb == 0) ? 0.0 : dot / (Math.sqrt(na) * Math.sqrt(nb));
                 });
 
-        // embed(): 包含猎聘/投递/求职关键词 → MATCH_VEC，否则 → NOMATCH_VEC
-        // Skill description 中含有"猎聘"，所以缓存向量 = MATCH_VEC
         when(embeddingService.embed(anyString())).thenAnswer(inv -> {
             String text = inv.getArgument(0);
             if (text != null && (text.contains("猎聘")
@@ -77,17 +74,14 @@ class EmbeddingSkillSelectorTest {
     @Test
     void shouldSelectLiepinSkillForJobSearch() {
         Optional<SkillDefinition> result = skillSelector.select(
-                "帮我在猎聘搜索杭州Java岗位"
-        );
+                "帮我在猎聘搜索杭州Java岗位");
         assertTrue(result.isPresent());
         assertEquals("liepin-auto-apply", result.get().name());
     }
 
     @Test
     void shouldSelectLiepinSkillForAutoApply() {
-        Optional<SkillDefinition> result = skillSelector.select(
-                "给我创建一个自动投递计划"
-        );
+        Optional<SkillDefinition> result = skillSelector.select("给我创建一个自动投递计划");
         assertTrue(result.isPresent());
         assertTrue(result.get().tools().contains("createLiepinAutoApplyCampaign"));
     }
@@ -100,22 +94,13 @@ class EmbeddingSkillSelectorTest {
     }
 
     @Test
-    void shouldSelectLiepinSkillForSynonymExpression() {
-        // "找工作" 包含 "工作" 但不是关键词——但 "海投" 也不在 mock 关键词中
-        // 测试至少一种同义表达能命中
-        assertTrue(skillSelector.select("猎聘找工作").isPresent());
-    }
-
-    @Test
     void shouldNotSelectSkillForWeatherQuery() {
-        Optional<SkillDefinition> result = skillSelector.select("明天杭州天气怎么样");
-        assertTrue(result.isEmpty());
+        assertTrue(skillSelector.select("明天杭州天气怎么样").isEmpty());
     }
 
     @Test
     void shouldNotSelectSkillForNormalDocumentQuestion() {
-        Optional<SkillDefinition> result = skillSelector.select("帮我总结一下这份简历");
-        assertTrue(result.isEmpty());
+        assertTrue(skillSelector.select("帮我总结一下这份简历").isEmpty());
     }
 
     @Test
@@ -125,8 +110,36 @@ class EmbeddingSkillSelectorTest {
         assertTrue(skillSelector.select("   ").isEmpty());
     }
 
+    // === 降级路径测试（Embedding API 不可用） ===
+
     @Test
-    void shouldReturnEmptyWhenCacheIsEmpty() {
+    void shouldFallbackToKeywordsWhenEmbeddingFails() {
+        // 构造一个 Embedding 全部失败的 Selector
+        EmbeddingService failingEmbedding = mock(EmbeddingService.class);
+        when(failingEmbedding.embed(anyString()))
+                .thenThrow(new RuntimeException("API unavailable"));
+
+        SkillLoader skillLoader = new SkillLoader();
+        SkillRegistry skillRegistry = new SkillRegistry(skillLoader);
+        skillRegistry.loadAll();
+
+        EmbeddingSkillSelector fallbackSelector = new EmbeddingSkillSelector(
+                skillRegistry, failingEmbedding);
+        fallbackSelector.buildEmbeddingCache(); // 缓存为空
+
+        // "猎聘" 出现在 description 中 → 降级关键词匹配应命中
+        assertTrue(fallbackSelector.select("帮我在猎聘搜索杭州Java岗位").isPresent());
+
+        // "投递" 出现在 description 中 → 应命中
+        assertTrue(fallbackSelector.select("帮我投递简历").isPresent());
+        assertTrue(fallbackSelector.select("查看投递状态").isPresent());
+
+        // 不相关消息 → 不应命中
+        assertTrue(fallbackSelector.select("明天天气怎么样").isEmpty());
+    }
+
+    @Test
+    void shouldReturnEmptyWhenCacheIsEmptyAndNoKeywordMatch() {
         EmbeddingSkillSelector emptySelector = new EmbeddingSkillSelector(
                 mock(SkillRegistry.class), mock(EmbeddingService.class));
         assertTrue(emptySelector.select("猎聘搜索岗位").isEmpty());

@@ -8,6 +8,7 @@ import ykd.ykd.skill.model.SkillDefinition;
 import ykd.ykd.skill.registry.SkillRegistry;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,9 +16,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 基于 Embedding 语义相似度的 Skill 选择器。
  *
- * 启动时预计算每个 Skill 的 description embedding，
+ * <p>启动时预计算每个 Skill 的 description embedding，
  * 请求时将用户消息 embedding 与所有 Skill 逐一比对余弦相似度，
- * 超过阈值的最高分 Skill 即为命中。
+ * 超过阈值的最高分 Skill 即为命中。</p>
+ *
+ * <p>当 Embedding API 不可用时（如 API key 未配置），
+ * 自动降级为从 Skill description 中提取特征词的子串匹配，
+ * 确保 Skill 路由不会因外部依赖故障而完全失效。</p>
  */
 @Slf4j
 @Component
@@ -63,8 +68,13 @@ public class EmbeddingSkillSelector implements SkillSelector {
             }
         }
 
-        log.info("[SkillSelector] Embedding 缓存构建完成: cached={}/total={}",
-                skillEmbeddings.size(), enabled.size());
+        if (skillEmbeddings.isEmpty()) {
+            log.warn("[SkillSelector] 所有 Skill 的 Embedding 计算均失败，"
+                    + "将降级为 description 关键词匹配。请检查 Embedding API 配置。");
+        } else {
+            log.info("[SkillSelector] Embedding 缓存构建完成: cached={}/total={}",
+                    skillEmbeddings.size(), enabled.size());
+        }
     }
 
     @Override
@@ -73,13 +83,20 @@ public class EmbeddingSkillSelector implements SkillSelector {
             return Optional.empty();
         }
 
-        if (skillEmbeddings.isEmpty()) {
-            log.warn("[SkillSelector] Embedding 缓存为空，无法匹配");
-            return Optional.empty();
+        String trimmed = message.trim();
+
+        // 主路径：Embedding 语义匹配
+        if (!skillEmbeddings.isEmpty()) {
+            return selectByEmbedding(trimmed);
         }
 
-        // 截断过长消息，减少 Embedding API 开销
-        String trimmed = message.trim();
+        // 降级路径：description 子串匹配
+        return selectByKeywords(trimmed);
+    }
+
+    // ---- Embedding 主路径 ----
+
+    private Optional<SkillDefinition> selectByEmbedding(String trimmed) {
         String embedTarget = trimmed.length() > MAX_EMBED_TEXT_LENGTH
                 ? trimmed.substring(0, MAX_EMBED_TEXT_LENGTH)
                 : trimmed;
@@ -89,22 +106,21 @@ public class EmbeddingSkillSelector implements SkillSelector {
             String msgEmbeddingJson = embeddingService.embed(embedTarget);
             msgVector = embeddingService.jsonToFloatArray(msgEmbeddingJson);
         } catch (Exception e) {
-            log.error("[SkillSelector] 用户消息 Embedding 失败: {}", e.getMessage());
-            return Optional.empty();
+            log.error("[SkillSelector] 用户消息 Embedding 失败，降级为关键词匹配: {}",
+                    e.getMessage());
+            return selectByKeywords(trimmed);
         }
 
         if (msgVector.length == 0) {
-            log.warn("[SkillSelector] 用户消息 Embedding 为空向量");
-            return Optional.empty();
+            log.warn("[SkillSelector] 用户消息 Embedding 为空向量，降级为关键词匹配");
+            return selectByKeywords(trimmed);
         }
 
-        // 遍历所有 Skill 找最高相似度
         String bestName = null;
         double bestScore = 0.0;
 
         for (var entry : skillEmbeddings.entrySet()) {
             double score = embeddingService.cosineSimilarity(msgVector, entry.getValue());
-            log.debug("[SkillSelector] 相似度: skill={}, score={:.4f}", entry.getKey(), score);
             if (score > bestScore) {
                 bestScore = score;
                 bestName = entry.getKey();
@@ -121,6 +137,81 @@ public class EmbeddingSkillSelector implements SkillSelector {
                 bestScore > 0 ? String.format("%.3f", bestScore) : "N/A", preview(trimmed));
         return Optional.empty();
     }
+
+    // ---- 降级：关键词子串匹配 ----
+
+    /**
+     * 从 Skill description 中提取特征词做子串匹配。
+     * 将 description 按标点切分，对用户消息做 contains 检查。
+     * 如果多个 Skill 都匹配，返回匹配片段最长的那个。
+     */
+    private Optional<SkillDefinition> selectByKeywords(String message) {
+        String normalized = message.toLowerCase(Locale.ROOT);
+
+        SkillDefinition bestSkill = null;
+        int bestMatchLen = 0;
+
+        for (SkillDefinition skill : skillRegistry.findAllEnabled()) {
+            int matchLen = matchScore(skill, normalized);
+            if (matchLen > bestMatchLen) {
+                bestMatchLen = matchLen;
+                bestSkill = skill;
+            }
+        }
+
+        if (bestSkill != null && bestMatchLen > 0) {
+            log.info("[SkillSelector] 关键词降级命中: name={}, matchLen={}, preview={}",
+                    bestSkill.name(), bestMatchLen, preview(message));
+            return Optional.of(bestSkill);
+        }
+
+        log.debug("[SkillSelector] 关键词降级也未命中: preview={}", preview(message));
+        return Optional.empty();
+    }
+
+    /**
+     * 计算 Skill 的 description + name 与用户消息的匹配程度。
+     * 先将 description 按标点切分为片段，完整片段命中直接返回其长度；
+     * 长片段（>3 字）未完整命中时，进一步检查其 2~4 字子串，
+     * 确保"猎聘"、"投递"等嵌入在长句中的特征词能被提取到。
+     *
+     * @return 用户消息中包含的最长匹配片段长度，0 表示未命中
+     */
+    private int matchScore(SkillDefinition skill, String normalizedMessage) {
+        String source = (skill.name() + " " + skill.description()).toLowerCase(Locale.ROOT);
+
+        // 按常见分隔符切分
+        String[] segments = source.split("[，。！？、；：（）\\s,.!?;:()\\[\\]【】\\-—…]+");
+
+        int maxLen = 0;
+        for (String segment : segments) {
+            String trimmed = segment.trim();
+            if (trimmed.length() < 2) continue;
+
+            // 完整片段命中
+            if (normalizedMessage.contains(trimmed)) {
+                maxLen = Math.max(maxLen, trimmed.length());
+                continue;
+            }
+
+            // 长片段未完整命中 → 检查 2~4 字子串
+            if (trimmed.length() > 3) {
+                int subMax = Math.min(4, trimmed.length() - 1);
+                for (int len = subMax; len >= 2; len--) {
+                    for (int i = 0; i <= trimmed.length() - len; i++) {
+                        String sub = trimmed.substring(i, i + len);
+                        if (normalizedMessage.contains(sub)) {
+                            maxLen = Math.max(maxLen, len);
+                        }
+                    }
+                }
+            }
+        }
+
+        return maxLen;
+    }
+
+    // ---- 公共工具方法 ----
 
     /**
      * 构造用于 Embedding 匹配的文本。
