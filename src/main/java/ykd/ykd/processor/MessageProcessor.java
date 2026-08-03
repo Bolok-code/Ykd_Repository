@@ -169,12 +169,28 @@ public class MessageProcessor {
                         // 保留缓存：saveCurrentDocumentAsLiepinResume 工具需要读原文；
                         // Skill 命令会由 isSkillCommand 自动清缓存并走正常路由
                     }
-                    String systemContext = String.format(
-                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",
-                            fileName, cachedContent);
-                    String reply = llmService.chat("请给出简要总结", List.of(), deepseekClient, fromUserId, systemContext);
+
+                    // 识别为简历时，注入"系统支持猎聘投递"的上下文，
+                    // 盖过对话历史里"没有投递功能"的过时错误记忆
+                    String systemContext;
+                    String summaryPrompt;
+                    if (resumeSaved) {
+                        systemContext = String.format(
+                                "用户发送了简历文件「%s」，内容如下：\n---\n%s\n---\n\n"
+                                + "这是用户的求职简历，已成功保存到系统。当前系统具备猎聘岗位搜索、"
+                                + "简历匹配和自动投递能力。请简要确认简历要点，并引导用户下一步操作"
+                                + "（如搜索岗位或创建投递计划）。不要再说系统不支持投递。",
+                                fileName, cachedContent);
+                        summaryPrompt = "用户刚发送了求职简历，请确认简历要点并引导下一步";
+                    } else {
+                        systemContext = String.format(
+                                "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",
+                                fileName, cachedContent);
+                        summaryPrompt = "请给出简要总结";
+                    }
+                    String reply = llmService.chat(summaryPrompt, List.of(), deepseekClient, fromUserId, systemContext);
                     result[0] = resumeSaved
-                            ? reply + "\n\n已识别为简历并保存，可继续让我在猎聘搜索岗位。"
+                            ? reply + "\n\n✅ 简历已保存。可以直接对我说「帮我搜索岗位」或「创建自动投递计划」。"
                             : reply;
                 } catch (Exception e) {
                     log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
