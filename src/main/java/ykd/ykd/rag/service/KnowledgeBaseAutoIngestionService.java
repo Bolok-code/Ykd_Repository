@@ -7,11 +7,14 @@ import org.springframework.stereotype.Component;
 import ykd.ykd.document.DocumentParsingService;
 import ykd.ykd.document.ParseResult;
 import ykd.ykd.rag.config.RagProperties;
+import ykd.ykd.rag.mapper.KnowledgeDocumentMapper;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
 import java.util.List;
 
 /**
@@ -33,16 +36,19 @@ public class KnowledgeBaseAutoIngestionService implements ApplicationRunner {
     private final DocumentParsingService parsingService;
     private final DocumentIngestionService ingestionService;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final KnowledgeDocumentMapper documentMapper;
 
     public KnowledgeBaseAutoIngestionService(
             RagProperties ragProperties,
             DocumentParsingService parsingService,
             DocumentIngestionService ingestionService,
-            KnowledgeBaseService knowledgeBaseService) {
+            KnowledgeBaseService knowledgeBaseService,
+            KnowledgeDocumentMapper documentMapper) {
         this.ragProperties = ragProperties;
         this.parsingService = parsingService;
         this.ingestionService = ingestionService;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.documentMapper = documentMapper;
     }
 
     @Override
@@ -108,18 +114,12 @@ public class KnowledgeBaseAutoIngestionService implements ApplicationRunner {
                         continue;
                     }
 
-                    // 2. 检查是否已存在（通过哈希去重）
-                    if (knowledgeBaseService.hasDocuments(SYSTEM_USER_ID)) {
-                        // 已经有文档了，做个简单检查避免重复
-                        List<ykd.ykd.rag.model.KnowledgeDocument> existingDocs =
-                                knowledgeBaseService.listDocuments(SYSTEM_USER_ID);
-                        boolean alreadyExists = existingDocs.stream()
-                                .anyMatch(d -> fileName.equals(d.getFileName()));
-                        if (alreadyExists) {
-                            log.info("[AutoIngest] 文档已存在于知识库，跳过: {}", fileName);
-                            moveToDone(file, doneDir);
-                            continue;
-                        }
+                    // 2. 通过内容哈希去重（与 ingestDocument 内置的哈希校验一致）
+                    String contentHash = calculateHash(parseResult.text());
+                    if (documentMapper.findByUserIdAndFileHash(SYSTEM_USER_ID, contentHash) != null) {
+                        log.info("[AutoIngest] 文档已存在于知识库（哈希匹配），跳过: {}", fileName);
+                        moveToDone(file, doneDir);
+                        continue;
                     }
 
                     // 3. 入库
@@ -179,5 +179,21 @@ public class KnowledgeBaseAutoIngestionService implements ApplicationRunner {
         if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "Excel";
         if (lower.endsWith(".md")) return "Markdown";
         return "文本";
+    }
+
+    private String calculateHash(String content) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(content.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                String h = Integer.toHexString(0xff & b);
+                if (h.length() == 1) hex.append('0');
+                hex.append(h);
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            return "fallback_" + content.length() + "_" + System.currentTimeMillis();
+        }
     }
 }
