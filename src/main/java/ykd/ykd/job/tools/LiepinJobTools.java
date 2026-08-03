@@ -111,7 +111,7 @@ public class LiepinJobTools {
         return taskManager.listLatestCandidates(requireUserId());
     }
 
-    @Tool(description = "用户明确确认某个猎聘候选岗位后，打开该单个岗位并点击聊一聊。未经用户明确确认不得调用。")
+    @Tool(description = "用户明确确认某个猎聘候选岗位后，向该岗位发送简历（在线简历优先，附件简历兜底）。未经用户明确确认不得调用。")
     public String confirmLiepinJobApplication(
             @ToolParam(description = "候选列表中的序号，从1开始") int candidateIndex) {
         return taskManager.confirmApplication(requireUserId(), candidateIndex);

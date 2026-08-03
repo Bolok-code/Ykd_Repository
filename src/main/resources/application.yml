@@ -63,7 +63,7 @@ liepin:
   max-search-results: 10
   max-search-pages: 3
   default-salary-code: ""
-  default-greeting: 请先在猎聘 App 中设置默认招呼语；程序确认岗位后只点击“聊一聊”，不会额外重复发送文本。
+  default-greeting: 请先在猎聘 App 中设置默认招呼语；程序确认岗位后会向该岗位发送简历，不会只打招呼。
   auto-apply:
     enabled: ${LIEPIN_AUTO_APPLY_ENABLED:false}
     scan-interval-ms: ${LIEPIN_AUTO_SCAN_INTERVAL_MS:60000}
