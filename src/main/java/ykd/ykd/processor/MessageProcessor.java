@@ -166,8 +166,8 @@ public class MessageProcessor {
                     if (resumeSaved) {
                         byte[] originalBytes = DocumentTools.getCachedBytes(fromUserId);
                         liepinResumeService.save(fromUserId, fileName, cachedContent, originalBytes);
-                        // 简历已保存，清除文件缓存让用户立刻能用投递命令
-                        DocumentTools.clearCachedDocument(fromUserId);
+                        // 保留缓存：saveCurrentDocumentAsLiepinResume 工具需要读原文；
+                        // Skill 命令会由 isSkillCommand 自动清缓存并走正常路由
                     }
                     String systemContext = String.format(
                             "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",

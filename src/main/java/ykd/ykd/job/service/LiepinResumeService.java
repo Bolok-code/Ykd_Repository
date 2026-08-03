@@ -52,31 +52,28 @@ public class LiepinResumeService {
         resume.setContent(content);
         resumeMapper.upsert(resume);
 
+        // 只有确实有新附件字节时才处理磁盘附件。
+        // 新附件写成功后再清理旧文件，防止写失败时旧附件丢失。
         if (originalBytes != null && originalBytes.length > 0) {
-            // 先删旧附件文件，再保存新的
-            deleteOldAsset(userId);
+            LiepinResumeAsset oldAsset = assetMapper.findByUserId(userId);
             persistAsset(userId, fileName, originalBytes);
+            if (oldAsset != null && oldAsset.getFilePath() != null) {
+                deleteFileQuietly(oldAsset.getFilePath());
+            }
         }
     }
 
-    /**
-     * 删除用户旧的简历附件（磁盘文件 + DB 记录）。
-     * 更换简历时调用，避免旧文件堆积。
-     */
-    private void deleteOldAsset(String userId) {
-        LiepinResumeAsset oldAsset = assetMapper.findByUserId(userId);
-        if (oldAsset != null && oldAsset.getFilePath() != null) {
-            try {
-                Path oldFile = Path.of(oldAsset.getFilePath());
-                if (Files.isRegularFile(oldFile)) {
-                    Files.deleteIfExists(oldFile);
-                    log.info("[ResumeService] 已删除旧附件文件: {}", oldFile);
-                }
-            } catch (IOException e) {
-                log.warn("[ResumeService] 删除旧附件文件失败: path={}, error={}",
-                        oldAsset.getFilePath(), e.getMessage());
+    /** 删除磁盘上的文件（静默失败）。 */
+    private void deleteFileQuietly(String filePath) {
+        try {
+            Path file = Path.of(filePath);
+            if (Files.isRegularFile(file)) {
+                Files.deleteIfExists(file);
+                log.info("[ResumeService] 已删除旧附件文件: {}", file);
             }
-            assetMapper.deleteByUserId(userId);
+        } catch (IOException e) {
+            log.warn("[ResumeService] 删除旧附件文件失败: path={}, error={}",
+                    filePath, e.getMessage());
         }
     }
 

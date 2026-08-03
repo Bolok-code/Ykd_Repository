@@ -3,6 +3,7 @@ package ykd.ykd.job.tools;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import ykd.ykd.job.model.LiepinResume;
 import ykd.ykd.job.service.LiepinCampaignService;
 import ykd.ykd.job.service.LiepinResumeService;
 import ykd.ykd.job.task.LiepinJobTaskManager;
@@ -76,6 +77,14 @@ public class LiepinJobTools {
         String fileName = DocumentTools.getCachedFileName(userId);
         byte[] originalBytes = DocumentTools.getCachedBytes(userId);
         if (content == null || content.isBlank()) {
+            // 缓存为空（可能是 Skill 命令清除了），检查是否已有保存过的简历
+            LiepinResume existing = resumeService.find(userId);
+            if (existing != null) {
+                boolean hasAttachment = existing.getFilePath() != null;
+                return "当前已有已保存的简历：" + existing.getFileName()
+                        + (hasAttachment ? "（已保留原文件，可直接投递）" : "（仅有文本内容，附件投递需重新发送PDF、DOC或DOCX文件）")
+                        + "。无需重复保存，可直接继续投递。";
+            }
             return "没有找到刚才解析的文件，请先发送简历文件。";
         }
         resumeService.save(userId, fileName, content, originalBytes);
