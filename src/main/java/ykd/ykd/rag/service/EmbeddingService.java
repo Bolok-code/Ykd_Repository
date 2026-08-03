@@ -8,6 +8,7 @@ import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import ykd.ykd.rag.config.RagProperties;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,10 +23,13 @@ public class EmbeddingService {
 
     private final EmbeddingModel embeddingModel;
     private final ObjectMapper objectMapper;
+    private final RagProperties ragProperties;
 
-    public EmbeddingService(@Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel) {
+    public EmbeddingService(@Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
+                            RagProperties ragProperties) {
         this.embeddingModel = embeddingModel;
         this.objectMapper = new ObjectMapper();
+        this.ragProperties = ragProperties;
     }
     
     /**
@@ -42,29 +46,35 @@ public class EmbeddingService {
         
         try {
             EmbeddingResponse response = embeddingModel.embedForResponse(List.of(text));
-            
+
             if (response == null || response.getResults().isEmpty()) {
                 log.error("[Embedding] 模型返回空结果");
-                return "[]";
+                throw new IllegalStateException("Embedding 模型返回空结果");
             }
-            
+
             float[] vector = response.getResults().get(0).getOutput();
+
+            if (vector == null || vector.length == 0) {
+                log.error("[Embedding] 返回的向量为空");
+                throw new IllegalStateException("Embedding 返回的向量为空");
+            }
+
             String vectorJson = floatArrayToJson(vector);
-            
-            log.debug("[Embedding] 文本向量化完成: textLength={}, vectorDim={}", 
+
+            log.debug("[Embedding] 文本向量化完成: textLength={}, vectorDim={}",
                     text.length(), vector.length);
-            
+
             return vectorJson;
-            
+
         } catch (Exception e) {
             log.error("[Embedding] 向量化失败: {}", e.getMessage(), e);
-            return "[]";
+            throw new RuntimeException("向量化失败: " + e.getMessage(), e);
         }
     }
     
     /**
-     * 批量将文本转换为向量
-     * 
+     * 批量将文本转换为向量，自动按 {@link RagProperties#getEmbedBatchSize()} 分批请求。
+     *
      * @param texts 文本列表
      * @return 向量 JSON 字符串列表
      */
@@ -72,44 +82,62 @@ public class EmbeddingService {
         if (texts == null || texts.isEmpty()) {
             return List.of();
         }
-        
+
         // 过滤空白文本
         List<String> validTexts = texts.stream()
                 .filter(text -> text != null && !text.isBlank())
                 .toList();
-        
+
         if (validTexts.isEmpty()) {
             log.warn("[Embedding] 所有输入文本为空");
             return new ArrayList<>();
         }
-        
-        try {
-            log.info("[Embedding] 批量向量化开始: count={}", validTexts.size());
-            
-            EmbeddingResponse response = embeddingModel.embedForResponse(validTexts);
-            
-            if (response == null || response.getResults().isEmpty()) {
-                log.error("[Embedding] 批量向量化返回空结果");
-                return validTexts.stream().map(t -> "[]").toList();
-            }
-            
-            List<String> vectorJsonList = new ArrayList<>();
-            for (int i = 0; i < response.getResults().size(); i++) {
-                float[] vector = response.getResults().get(i).getOutput();
-                vectorJsonList.add(floatArrayToJson(vector));
-            }
-            
-            log.info("[Embedding] 批量向量化完成: count={}, vectorDim={}", 
-                    vectorJsonList.size(), 
-                    response.getResults().get(0).getOutput().length);
-            
-            return vectorJsonList;
-            
-        } catch (Exception e) {
-            log.error("[Embedding] 批量向量化失败: {}", e.getMessage(), e);
-            // 返回空向量列表
-            return validTexts.stream().map(t -> "[]").toList();
+
+        int batchSize = ragProperties.getEmbedBatchSize();
+        if (batchSize <= 0) {
+            batchSize = 25;
         }
+
+        log.info("[Embedding] 批量向量化开始: totalCount={}, batchSize={}", validTexts.size(), batchSize);
+
+        List<String> allVectors = new ArrayList<>();
+
+        for (int batchStart = 0; batchStart < validTexts.size(); batchStart += batchSize) {
+            int batchEnd = Math.min(batchStart + batchSize, validTexts.size());
+            List<String> batch = validTexts.subList(batchStart, batchEnd);
+
+            try {
+                log.debug("[Embedding] 发送批次: [{}-{})/{}", batchStart, batchEnd, validTexts.size());
+
+                EmbeddingResponse response = embeddingModel.embedForResponse(batch);
+
+                if (response == null || response.getResults().isEmpty()) {
+                    log.error("[Embedding] 批次 [{}-{}) 返回空结果", batchStart, batchEnd);
+                    throw new IllegalStateException("Embedding 批量向量化返回空结果");
+                }
+
+                for (int i = 0; i < response.getResults().size(); i++) {
+                    float[] vector = response.getResults().get(i).getOutput();
+
+                    if (vector == null || vector.length == 0) {
+                        log.error("[Embedding] 批次中第 {} 个向量为空", batchStart + i);
+                        throw new IllegalStateException("Embedding 第 " + (batchStart + i) + " 个向量为空");
+                    }
+
+                    allVectors.add(floatArrayToJson(vector));
+                }
+
+            } catch (Exception e) {
+                log.error("[Embedding] 批次 [{}-{}) 向量化失败: {}", batchStart, batchEnd, e.getMessage(), e);
+                throw new RuntimeException("批量向量化失败 (batch [" + batchStart + "-" + batchEnd + ")): " + e.getMessage(), e);
+            }
+        }
+
+        log.info("[Embedding] 批量向量化完成: totalCount={}, batchCount={}",
+                allVectors.size(),
+                (int) Math.ceil((double) validTexts.size() / batchSize));
+
+        return allVectors;
     }
     
     /**

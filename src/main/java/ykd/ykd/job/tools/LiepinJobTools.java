@@ -3,6 +3,7 @@ package ykd.ykd.job.tools;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import ykd.ykd.job.model.LiepinResume;
 import ykd.ykd.job.service.LiepinCampaignService;
 import ykd.ykd.job.service.LiepinResumeService;
 import ykd.ykd.job.task.LiepinJobTaskManager;
@@ -80,6 +81,14 @@ public class LiepinJobTools {
         String fileName = DocumentTools.getCachedFileName(userId);
         byte[] originalBytes = DocumentTools.getCachedBytes(userId);
         if (content == null || content.isBlank()) {
+            // 缓存为空（可能是 Skill 命令清除了），检查是否已有保存过的简历
+            LiepinResume existing = resumeService.find(userId);
+            if (existing != null) {
+                boolean hasAttachment = existing.getFilePath() != null;
+                return "当前已有已保存的简历：" + existing.getFileName()
+                        + (hasAttachment ? "（已保留原文件，可直接投递）" : "（仅有文本内容，附件投递需重新发送PDF、DOC或DOCX文件）")
+                        + "。无需重复保存，可直接继续投递。";
+            }
             return "没有找到刚才解析的文件，请先发送简历文件。";
         }
         resumeService.save(userId, fileName, content, originalBytes);
@@ -106,7 +115,7 @@ public class LiepinJobTools {
         return taskManager.listLatestCandidates(requireUserId());
     }
 
-    @Tool(description = "用户明确确认某个猎聘候选岗位后，打开该单个岗位并点击聊一聊。未经用户明确确认不得调用。")
+    @Tool(description = "用户明确确认某个猎聘候选岗位后，点击该岗位的\"聊一聊\"按钮发起投递（猎聘会自动发送预置招呼语）。未经用户明确确认不得调用。")
     public String confirmLiepinJobApplication(
             @ToolParam(description = "候选列表中的序号，从1开始") int candidateIndex) {
         return taskManager.confirmApplication(requireUserId(), candidateIndex);

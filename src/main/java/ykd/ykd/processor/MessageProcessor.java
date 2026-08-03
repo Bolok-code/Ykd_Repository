@@ -10,6 +10,8 @@ import ykd.ykd.document.DocumentParsingService;
 import ykd.ykd.job.service.LiepinResumeService;
 import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.llm.tools.DocumentTools;
+import ykd.ykd.skill.model.SkillDefinition;
+import ykd.ykd.skill.selector.SkillSelector;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 import ykd.ykd.exception.BusinessException;
@@ -26,6 +28,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.regex.Matcher;
@@ -65,6 +68,7 @@ public class MessageProcessor {
     private final DocumentParsingService documentParsingService;
     private final LiepinResumeService liepinResumeService;
     private final LiepinJobTaskManager liepinJobTaskManager;
+    private final SkillSelector skillSelector;
     private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
     private final Queue<ProcessResult> completedLiepinTasks = new ConcurrentLinkedQueue<>();
@@ -79,7 +83,8 @@ public class MessageProcessor {
                             Queue<ProcessResult> voiceQueue,
                             DocumentParsingService documentParsingService,
                             LiepinResumeService liepinResumeService,
-                            LiepinJobTaskManager liepinJobTaskManager) {
+                            LiepinJobTaskManager liepinJobTaskManager,
+                            SkillSelector skillSelector) {
         this.llmService = llmService;
         this.deepseekClient = deepseekClient;
         this.agnesClient = agnesClient;
@@ -90,6 +95,7 @@ public class MessageProcessor {
         this.documentParsingService = documentParsingService;
         this.liepinResumeService = liepinResumeService;
         this.liepinJobTaskManager = liepinJobTaskManager;
+        this.skillSelector = skillSelector;
     }
 
     /**
@@ -158,14 +164,33 @@ public class MessageProcessor {
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
                     boolean resumeSaved = liepinResumeService.looksLikeResume(fileName, cachedContent);
                     if (resumeSaved) {
-                        liepinResumeService.save(fromUserId, fileName, cachedContent);
+                        byte[] originalBytes = DocumentTools.getCachedBytes(fromUserId);
+                        liepinResumeService.save(fromUserId, fileName, cachedContent, originalBytes);
+                        // 保留缓存：saveCurrentDocumentAsLiepinResume 工具需要读原文；
+                        // Skill 命令会由 isSkillCommand 自动清缓存并走正常路由
                     }
-                    String systemContext = String.format(
-                            "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",
-                            fileName, cachedContent);
-                    String reply = llmService.chat("请给出简要总结", List.of(), deepseekClient, fromUserId, systemContext);
+
+                    // 识别为简历时，注入"系统支持猎聘投递"的上下文，
+                    // 盖过对话历史里"没有投递功能"的过时错误记忆
+                    String systemContext;
+                    String summaryPrompt;
+                    if (resumeSaved) {
+                        systemContext = String.format(
+                                "用户发送了简历文件「%s」，内容如下：\n---\n%s\n---\n\n"
+                                + "这是用户的求职简历，已成功保存到系统。当前系统具备猎聘岗位搜索、"
+                                + "简历匹配和自动投递能力。请简要确认简历要点，并引导用户下一步操作"
+                                + "（如搜索岗位或创建投递计划）。不要再说系统不支持投递。",
+                                fileName, cachedContent);
+                        summaryPrompt = "用户刚发送了求职简历，请确认简历要点并引导下一步";
+                    } else {
+                        systemContext = String.format(
+                                "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",
+                                fileName, cachedContent);
+                        summaryPrompt = "请给出简要总结";
+                    }
+                    String reply = llmService.chat(summaryPrompt, List.of(), deepseekClient, fromUserId, systemContext);
                     result[0] = resumeSaved
-                            ? reply + "\n\n已识别为简历并保存，可继续让我在猎聘搜索岗位。"
+                            ? reply + "\n\n✅ 简历已保存。可以直接对我说「帮我搜索岗位」或「创建自动投递计划」。"
                             : reply;
                 } catch (Exception e) {
                     log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
@@ -190,25 +215,32 @@ public class MessageProcessor {
 
 
             if (text != null && !text.isBlank()) {
-                String cachedContent = DocumentTools.getCachedContent(fromUserId);
-                String cachedFileName = DocumentTools.getCachedFileName(fromUserId);
-                log.info("[Processor] 用户对文件追问: userId={}, question={}", fromUserId, text);
+                // 命中 Skill 命令时，清除文件缓存并走正常路由（Skill 提示词不应被文件上下文污染）
+                if (isSkillCommand(text)) {
+                    DocumentTools.clearCachedDocument(fromUserId);
+                    log.info("[Processor] 检测到 Skill 命令，退出文件追问模式: userId={}, text={}",
+                            fromUserId, text);
+                } else {
+                    String cachedContent = DocumentTools.getCachedContent(fromUserId);
+                    String cachedFileName = DocumentTools.getCachedFileName(fromUserId);
+                    log.info("[Processor] 用户对文件追问: userId={}, question={}", fromUserId, text);
 
-                String[] result = new String[1];
-                String finalText = text;
-                userContext.executeAs(fromUserId, () -> {
-                    try {
-                        String systemContext = String.format(
-                                "用户之前发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请根据文件内容回答用户的问题。",
-                                cachedFileName, cachedContent);
-                        String reply = llmService.chat(finalText, List.of(), deepseekClient, fromUserId, systemContext);
-                        result[0] = reply;
-                    } catch (Exception e) {
-                        log.error("[Processor] 文件追问处理失败: {}", e.getMessage(), e);
-                        result[0] = "❌ 处理失败，请稍后重试";
-                    }
-                });
-                return ProcessResult.text(result[0] != null ? result[0] : "❌ 处理失败", fromUserId);
+                    String[] result = new String[1];
+                    String finalText = text;
+                    userContext.executeAs(fromUserId, () -> {
+                        try {
+                            String systemContext = String.format(
+                                    "用户之前发送了文件「%s」，以下是文件内容：\n---\n%s\n---\n\n请根据文件内容回答用户的问题。",
+                                    cachedFileName, cachedContent);
+                            String reply = llmService.chat(finalText, List.of(), deepseekClient, fromUserId, systemContext);
+                            result[0] = reply;
+                        } catch (Exception e) {
+                            log.error("[Processor] 文件追问处理失败: {}", e.getMessage(), e);
+                            result[0] = "❌ 处理失败，请稍后重试";
+                        }
+                    });
+                    return ProcessResult.text(result[0] != null ? result[0] : "❌ 处理失败", fromUserId);
+                }
             }
         }
 
@@ -423,6 +455,21 @@ public class MessageProcessor {
                 || trimmed.equals("退出追问")
                 || trimmed.equals("停止文件问答")
                 || trimmed.equals("退出文件问答");
+    }
+
+    /**
+     * 判断消息是否命中某个 Skill 命令。
+     * 命中时不应作为文件追问处理，而应走正常的 Skill 路由。
+     */
+    private boolean isSkillCommand(String text) {
+        if (text == null || text.isBlank()) return false;
+        try {
+            Optional<SkillDefinition> skill = skillSelector.select(text);
+            return skill.isPresent();
+        } catch (Exception e) {
+            log.warn("[Processor] Skill 命令检测失败，按普通消息处理: {}", e.getMessage());
+            return false;
+        }
     }
 
 }

@@ -19,6 +19,9 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Set;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class LiepinResumeService {
     private static final Set<String> ATTACHMENT_TYPES = Set.of("pdf", "doc", "docx");
@@ -49,8 +52,28 @@ public class LiepinResumeService {
         resume.setContent(content);
         resumeMapper.upsert(resume);
 
+        // 只有确实有新附件字节时才处理磁盘附件。
+        // 新附件写成功后再清理旧文件，防止写失败时旧附件丢失。
         if (originalBytes != null && originalBytes.length > 0) {
+            LiepinResumeAsset oldAsset = assetMapper.findByUserId(userId);
             persistAsset(userId, fileName, originalBytes);
+            if (oldAsset != null && oldAsset.getFilePath() != null) {
+                deleteFileQuietly(oldAsset.getFilePath());
+            }
+        }
+    }
+
+    /** 删除磁盘上的文件（静默失败）。 */
+    private void deleteFileQuietly(String filePath) {
+        try {
+            Path file = Path.of(filePath);
+            if (Files.isRegularFile(file)) {
+                Files.deleteIfExists(file);
+                log.info("[ResumeService] 已删除旧附件文件: {}", file);
+            }
+        } catch (IOException e) {
+            log.warn("[ResumeService] 删除旧附件文件失败: path={}, error={}",
+                    filePath, e.getMessage());
         }
     }
 

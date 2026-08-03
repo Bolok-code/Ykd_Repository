@@ -1,0 +1,183 @@
+package ykd.ykd.rag.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.stereotype.Component;
+import ykd.ykd.document.DocumentParsingService;
+import ykd.ykd.document.ParseResult;
+import ykd.ykd.rag.config.RagProperties;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.List;
+
+/**
+ * 知识库自动入库服务。
+ * 应用启动时扫描配置目录中的文档，解析后自动写入 RAG 知识库，
+ * 解决知识库 0 数据的问题。
+ */
+@Slf4j
+@Component
+public class KnowledgeBaseAutoIngestionService implements ApplicationRunner {
+
+    private static final List<String> SUPPORTED_EXTENSIONS = List.of(
+            ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".csv", ".md"
+    );
+
+    private static final String SYSTEM_USER_ID = "system";
+
+    private final RagProperties ragProperties;
+    private final DocumentParsingService parsingService;
+    private final DocumentIngestionService ingestionService;
+    private final KnowledgeBaseService knowledgeBaseService;
+
+    public KnowledgeBaseAutoIngestionService(
+            RagProperties ragProperties,
+            DocumentParsingService parsingService,
+            DocumentIngestionService ingestionService,
+            KnowledgeBaseService knowledgeBaseService) {
+        this.ragProperties = ragProperties;
+        this.parsingService = parsingService;
+        this.ingestionService = ingestionService;
+        this.knowledgeBaseService = knowledgeBaseService;
+    }
+
+    @Override
+    public void run(ApplicationArguments args) {
+        if (!ragProperties.isAutoIngestEnabled()) {
+            log.info("[AutoIngest] 自动入库未启用，跳过");
+            return;
+        }
+
+        if (!ragProperties.isEnabled()) {
+            log.warn("[AutoIngest] RAG 功能未启用，跳过自动入库");
+            return;
+        }
+
+        String ingestDirPath = ragProperties.getAutoIngestDir();
+        Path ingestDir = Path.of(ingestDirPath);
+
+        if (!Files.isDirectory(ingestDir)) {
+            log.info("[AutoIngest] 自动入库目录不存在，跳过: {}", ingestDir.toAbsolutePath());
+            return;
+        }
+
+        log.info("[AutoIngest] 开始扫描自动入库目录: {}", ingestDir.toAbsolutePath());
+
+        Path doneDir = ingestDir.resolve(".ingested");
+        try {
+            Files.createDirectories(doneDir);
+        } catch (IOException e) {
+            log.error("[AutoIngest] 无法创建 .ingested 目录: {}", e.getMessage());
+            return;
+        }
+
+        int ingestedCount = 0;
+        int failedCount = 0;
+
+        try (var files = Files.list(ingestDir)) {
+            List<Path> candidateFiles = files
+                    .filter(Files::isRegularFile)
+                    .filter(f -> {
+                        String name = f.getFileName().toString().toLowerCase();
+                        return SUPPORTED_EXTENSIONS.stream().anyMatch(name::endsWith);
+                    })
+                    .toList();
+
+            if (candidateFiles.isEmpty()) {
+                log.info("[AutoIngest] 未发现可入库的文件");
+                return;
+            }
+
+            log.info("[AutoIngest] 发现 {} 个候选文件", candidateFiles.size());
+
+            for (Path file : candidateFiles) {
+                String fileName = file.getFileName().toString();
+                try {
+                    log.info("[AutoIngest] 正在处理: {}", fileName);
+
+                    // 1. 解析文档
+                    ParseResult parseResult = parsingService.parse(file, fileName);
+                    if (parseResult == null || parseResult.text() == null || parseResult.text().isBlank()) {
+                        log.warn("[AutoIngest] 文档解析结果为空: {}", fileName);
+                        failedCount++;
+                        moveToDone(file, doneDir);
+                        continue;
+                    }
+
+                    // 2. 检查是否已存在（通过哈希去重）
+                    if (knowledgeBaseService.hasDocuments(SYSTEM_USER_ID)) {
+                        // 已经有文档了，做个简单检查避免重复
+                        List<ykd.ykd.rag.model.KnowledgeDocument> existingDocs =
+                                knowledgeBaseService.listDocuments(SYSTEM_USER_ID);
+                        boolean alreadyExists = existingDocs.stream()
+                                .anyMatch(d -> fileName.equals(d.getFileName()));
+                        if (alreadyExists) {
+                            log.info("[AutoIngest] 文档已存在于知识库，跳过: {}", fileName);
+                            moveToDone(file, doneDir);
+                            continue;
+                        }
+                    }
+
+                    // 3. 入库
+                    String fileType = parseResult.fileType() != null ? parseResult.fileType() : detectFileType(fileName);
+                    Long documentId = ingestionService.ingestDocument(
+                            SYSTEM_USER_ID,
+                            fileName,
+                            fileType,
+                            parseResult.text()
+                    );
+
+                    log.info("[AutoIngest] 入库成功: fileName={}, documentId={}, textLength={}",
+                            fileName, documentId, parseResult.text().length());
+                    ingestedCount++;
+
+                    // 4. 成功后移动到 .ingested 目录
+                    moveToDone(file, doneDir);
+
+                } catch (Exception e) {
+                    log.error("[AutoIngest] 入库失败: fileName={}, error={}", fileName, e.getMessage(), e);
+                    failedCount++;
+                    // 失败的文件也移走，避免每次都重试失败
+                    moveToDone(file, doneDir);
+                }
+            }
+
+        } catch (IOException e) {
+            log.error("[AutoIngest] 扫描目录失败: {}", e.getMessage(), e);
+        }
+
+        log.info("[AutoIngest] 自动入库完成: 成功={}, 失败={}", ingestedCount, failedCount);
+    }
+
+    private void moveToDone(Path file, Path doneDir) {
+        try {
+            Path target = doneDir.resolve(file.getFileName().toString());
+            // 如果目标已存在，加时间戳避免冲突
+            if (Files.exists(target)) {
+                String baseName = file.getFileName().toString();
+                int dot = baseName.lastIndexOf('.');
+                String nameWithoutExt = dot > 0 ? baseName.substring(0, dot) : baseName;
+                String ext = dot > 0 ? baseName.substring(dot) : "";
+                target = doneDir.resolve(nameWithoutExt + "_" + System.currentTimeMillis() + ext);
+            }
+            Files.move(file, target, StandardCopyOption.ATOMIC_MOVE);
+            log.debug("[AutoIngest] 文件已移动到: {}", target);
+        } catch (IOException e) {
+            log.warn("[AutoIngest] 移动文件失败: {} -> {}, error={}",
+                    file, doneDir, e.getMessage());
+        }
+    }
+
+    private String detectFileType(String fileName) {
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".pdf")) return "PDF";
+        if (lower.endsWith(".docx") || lower.endsWith(".doc")) return "Word";
+        if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "Excel";
+        if (lower.endsWith(".md")) return "Markdown";
+        return "文本";
+    }
+}

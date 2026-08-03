@@ -59,10 +59,11 @@ ilink-creds.json.sync
 *.pcm
 
 ### 运行时数据 ###
-work/conversation.db
-work/ilink-session.json
-work/liepin/
+work/
 config/application-local.yml
+
+### 临时文档 ###
+doc/
 
 /ykd/
 
