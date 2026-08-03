@@ -17,8 +17,10 @@ import static org.mockito.Mockito.when;
 
 class EmbeddingSkillSelectorTest {
 
-    private static final String MATCH_VEC = "[1.0, 0.0, 0.0]";
-    private static final String NOMATCH_VEC = "[0.0, 1.0, 0.0]";
+    // 三类向量：猎聘/知识库/无关，确保 Embedding 相似度能正确区分
+    private static final String LIEPIN_VEC = "[1.0, 0.0, 0.0]";
+    private static final String KB_VEC = "[0.0, 1.0, 0.0]";
+    private static final String OTHER_VEC = "[0.0, 0.0, 1.0]";
 
     private EmbeddingSkillSelector skillSelector;
 
@@ -58,9 +60,14 @@ class EmbeddingSkillSelectorTest {
                     || text.contains("投递")
                     || text.contains("求职")
                     || text.contains("liepin"))) {
-                return MATCH_VEC;
+                return LIEPIN_VEC;
             }
-            return NOMATCH_VEC;
+            if (text != null && (text.contains("知识库")
+                    || text.contains("资料")
+                    || text.contains("文档"))) {
+                return KB_VEC;
+            }
+            return OTHER_VEC;
         });
 
         SkillLoader skillLoader = new SkillLoader();
@@ -93,6 +100,23 @@ class EmbeddingSkillSelectorTest {
         assertTrue(skillSelector.select("停止投递").isPresent());
     }
 
+    // === 知识库 Skill 路由测试 ===
+
+    @Test
+    void shouldSelectKnowledgeBaseSkillForStoreDocument() {
+        Optional<SkillDefinition> result = skillSelector.select("存入我们知识库");
+        assertTrue(result.isPresent());
+        assertEquals("knowledge-base", result.get().name());
+    }
+
+    @Test
+    void shouldSelectKnowledgeBaseSkillForDocQA() {
+        assertTrue(skillSelector.select("根据我的文档总结关键信息").isPresent());
+        assertTrue(skillSelector.select("资料里提到了什么").isPresent());
+    }
+
+    // === 负例：不应该命中任何 Skill ===
+
     @Test
     void shouldNotSelectSkillForWeatherQuery() {
         assertTrue(skillSelector.select("明天杭州天气怎么样").isEmpty());
@@ -100,6 +124,7 @@ class EmbeddingSkillSelectorTest {
 
     @Test
     void shouldNotSelectSkillForNormalDocumentQuestion() {
+        // "帮助我总结一下这份文件" vs 天气——两者都跟任何 Skill description 不匹配
         assertTrue(skillSelector.select("帮我总结一下这份简历").isEmpty());
     }
 
