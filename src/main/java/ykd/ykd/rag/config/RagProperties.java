@@ -16,14 +16,20 @@ public class RagProperties {
     private boolean enabled = true;
 
     /**
-     * 单个文本片段最大字符数。
+     * TokenTextSplitter 每个片段的 token 数上限。
+     * 中文约 1.5 字符/token，300 token ≈ 450 汉字。
      */
-    private int chunkSize = 600;
+    private int chunkSize = 300;
 
     /**
-     * 相邻文本片段重复字符数，防止语义被截断。
+     * TokenTextSplitter 片段最少字符数，低于此值会被合并到相邻片段。
      */
-    private int chunkOverlap = 100;
+    private int minChunkSizeChars = 50;
+
+    /**
+     * TokenTextSplitter 单文档最大片段数，防止超大文档撑爆。
+     */
+    private int maxNumChunks = 100;
 
     /**
      * 每次检索返回最相关的片段数量。

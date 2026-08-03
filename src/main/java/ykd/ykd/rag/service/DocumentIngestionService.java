@@ -1,6 +1,8 @@
 package ykd.ykd.rag.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ykd.ykd.rag.config.RagProperties;
@@ -25,21 +27,24 @@ public class DocumentIngestionService {
     
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeChunkMapper chunkMapper;
-    private final TextChunkService textChunkService;
     private final EmbeddingService embeddingService;
     private final RagProperties ragProperties;
-    
+    private final TokenTextSplitter tokenTextSplitter;
+
     public DocumentIngestionService(
             KnowledgeDocumentMapper documentMapper,
             KnowledgeChunkMapper chunkMapper,
-            TextChunkService textChunkService,
             EmbeddingService embeddingService,
             RagProperties ragProperties) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
-        this.textChunkService = textChunkService;
         this.embeddingService = embeddingService;
         this.ragProperties = ragProperties;
+        this.tokenTextSplitter = TokenTextSplitter.builder()
+                .withChunkSize(ragProperties.getChunkSize())
+                .withMinChunkSizeChars(ragProperties.getMinChunkSizeChars())
+                .withMaxNumChunks(ragProperties.getMaxNumChunks())
+                .build();
     }
     
     /**
@@ -87,8 +92,13 @@ public class DocumentIngestionService {
             Long documentId = document.getId();
             log.info("[DocIngestion] 文档记录已创建: documentId={}", documentId);
             
-            // 4. 文本切分
-            List<String> chunks = textChunkService.splitText(content);
+            // 4. 文本切分（Spring AI TokenTextSplitter，按 token 数切分）
+            Document doc = new Document(content);
+            List<Document> splitDocs = tokenTextSplitter.apply(List.of(doc));
+            List<String> chunks = splitDocs.stream()
+                    .map(Document::getText)
+                    .filter(t -> t != null && !t.isBlank())
+                    .toList();
             if (chunks.isEmpty()) {
                 log.warn("[DocIngestion] 文本切分结果为空");
                 updateDocumentStatus(documentId, "failed");
@@ -208,12 +218,13 @@ public class DocumentIngestionService {
     }
     
     /**
-     * 估算文档处理后的片段数量
-     * 
-     * @param content 文档内容
-     * @return 预计片段数量
+     * 估算文档处理后的片段数量（基于 token 数）。
+     * 中文约 1.5 字符/token，供参考。
      */
     public int estimateChunkCount(String content) {
-        return textChunkService.estimateChunkCount(content);
+        if (content == null || content.isBlank()) return 0;
+        int estimatedTokens = (int) (content.length() / 1.5);
+        int chunkSize = ragProperties.getChunkSize();
+        return Math.max(1, (int) Math.ceil((double) estimatedTokens / chunkSize));
     }
 }
