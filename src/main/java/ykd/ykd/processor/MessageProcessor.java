@@ -158,7 +158,8 @@ public class MessageProcessor {
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
                     boolean resumeSaved = liepinResumeService.looksLikeResume(fileName, cachedContent);
                     if (resumeSaved) {
-                        liepinResumeService.save(fromUserId, fileName, cachedContent);
+                        byte[] originalBytes = DocumentTools.getCachedBytes(fromUserId);
+                        liepinResumeService.save(fromUserId, fileName, cachedContent, originalBytes);
                     }
                     String systemContext = String.format(
                             "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",

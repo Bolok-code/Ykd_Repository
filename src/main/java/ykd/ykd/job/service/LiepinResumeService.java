@@ -19,6 +19,9 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Set;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class LiepinResumeService {
     private static final Set<String> ATTACHMENT_TYPES = Set.of("pdf", "doc", "docx");
@@ -50,7 +53,30 @@ public class LiepinResumeService {
         resumeMapper.upsert(resume);
 
         if (originalBytes != null && originalBytes.length > 0) {
+            // 先删旧附件文件，再保存新的
+            deleteOldAsset(userId);
             persistAsset(userId, fileName, originalBytes);
+        }
+    }
+
+    /**
+     * 删除用户旧的简历附件（磁盘文件 + DB 记录）。
+     * 更换简历时调用，避免旧文件堆积。
+     */
+    private void deleteOldAsset(String userId) {
+        LiepinResumeAsset oldAsset = assetMapper.findByUserId(userId);
+        if (oldAsset != null && oldAsset.getFilePath() != null) {
+            try {
+                Path oldFile = Path.of(oldAsset.getFilePath());
+                if (Files.isRegularFile(oldFile)) {
+                    Files.deleteIfExists(oldFile);
+                    log.info("[ResumeService] 已删除旧附件文件: {}", oldFile);
+                }
+            } catch (IOException e) {
+                log.warn("[ResumeService] 删除旧附件文件失败: path={}, error={}",
+                        oldAsset.getFilePath(), e.getMessage());
+            }
+            assetMapper.deleteByUserId(userId);
         }
     }
 

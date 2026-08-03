@@ -275,11 +275,27 @@ public class PlaywrightLiepinAutomationGateway implements LiepinAutomationGatewa
         current.waitForTimeout(200);
         Locator confirm = current.locator(LiepinLocators.ONLINE_RESUME_CONFIRM).first();
         if (visible(confirm)) confirm.click();
-        current.waitForTimeout(800);
+
+        // 条件等待发送成功标记，替代盲等 800ms
+        boolean sent = waitForResumeSent(current, 5000);
+        if (!sent) {
+            log.warn("[LiepinJob] 首次发送未检测到成功标记，重试一次: jobId={}", posting.getExternalJobId());
+            Locator retryConfirm = current.locator(LiepinLocators.ONLINE_RESUME_CONFIRM).first();
+            if (visible(retryConfirm)) {
+                retryConfirm.click();
+                sent = waitForResumeSent(current, 5000);
+            }
+        }
+
         ensureNoVerification(current);
         closeChatWindow(current);
-        return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - "
-                + posting.getJobName() + "”发送猎聘在线简历");
+
+        if (sent) {
+            return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - "
+                    + posting.getJobName() + "”发送猎聘在线简历");
+        }
+        return LiepinApplicationResult.failed(
+                "已点击发送简历但未检测到发送成功标记，请在电脑浏览器中确认是否发送成功");
     }
 
     private LiepinApplicationResult sendAttachmentResume(Page current,
@@ -320,11 +336,27 @@ public class PlaywrightLiepinAutomationGateway implements LiepinAutomationGatewa
         current.waitForTimeout(600);
         Locator send = current.locator(LiepinLocators.ATTACHMENT_SEND_BUTTON).first();
         if (visible(send)) send.click();
-        current.waitForTimeout(800);
+
+        // 条件等待发送成功标记，替代盲等 800ms
+        boolean sent = waitForResumeSent(current, 5000);
+        if (!sent) {
+            log.warn("[LiepinJob] 附件发送未检测到成功标记，重试一次: jobId={}", posting.getExternalJobId());
+            Locator retrySend = current.locator(LiepinLocators.ATTACHMENT_SEND_BUTTON).first();
+            if (visible(retrySend)) {
+                retrySend.click();
+                sent = waitForResumeSent(current, 5000);
+            }
+        }
+
         ensureNoVerification(current);
         closeChatWindow(current);
-        return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - "
-                + posting.getJobName() + "”发送附件简历“" + resume.getFileName() + "”");
+
+        if (sent) {
+            return LiepinApplicationResult.success("已向“" + posting.getCompanyName() + " - "
+                    + posting.getJobName() + "”发送附件简历“" + resume.getFileName() + "”");
+        }
+        return LiepinApplicationResult.failed(
+                "已点击发送附件简历但未检测到发送成功标记，请在电脑浏览器中确认是否发送成功");
     }
 
     private Locator firstVisible(Locator... locators) {
@@ -715,6 +747,26 @@ public class PlaywrightLiepinAutomationGateway implements LiepinAutomationGatewa
         try {
             return locator.count() > 0 && locator.isVisible();
         } catch (PlaywrightException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 条件等待简历发送成功标记出现。
+     * 猎聘发送简历后页面会出现"简历已发送"文案或简历卡片。
+     *
+     * @return true 如果检测到发送成功标记
+     */
+    private boolean waitForResumeSent(Page current, int timeoutMs) {
+        try {
+            current.locator(LiepinLocators.RESUME_SENT_MARKER).first().waitFor(
+                    new Locator.WaitForOptions()
+                            .setState(WaitForSelectorState.VISIBLE)
+                            .setTimeout(timeoutMs));
+            log.info("[LiepinJob] 检测到简历发送成功标记");
+            return true;
+        } catch (PlaywrightException e) {
+            log.warn("[LiepinJob] 等待发送成功标记超时 ({}ms): {}", timeoutMs, e.getMessage());
             return false;
         }
     }
