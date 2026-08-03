@@ -43,9 +43,9 @@ public class RagProperties {
 
     /**
      * Embedding 批量请求时每次最多发送多少条文本。
-     * DashScope text-embedding-v3 单次最多 25 条。
+     * OpenAI / DashScope text-embedding-v3 单次最多 10 条。
      */
-    private int embedBatchSize = 25;
+    private int embedBatchSize = 10;
 
     /**
      * 是否在启动时自动扫描目录并入库文档。
