@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class EmbeddingSkillSelector implements SkillSelector {
 
-    private static final double SIMILARITY_THRESHOLD = 0.6;
+    private static final double SIMILARITY_THRESHOLD = 0.45;
     private static final int MAX_EMBED_TEXT_LENGTH = 512;
 
     /**
