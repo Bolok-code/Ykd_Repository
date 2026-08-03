@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -30,6 +31,12 @@ public class EmbeddingSkillSelector implements SkillSelector {
 
     private static final double SIMILARITY_THRESHOLD = 0.6;
     private static final int MAX_EMBED_TEXT_LENGTH = 512;
+
+    /**
+     * 降级关键词匹配时忽略的通用词。
+     * 这些词出现在 Skill description 中，但由于过于通用，单独命中不能作为路由依据。
+     */
+    private static final Set<String> KEYWORD_BLACKLIST = Set.of("简历");
 
     private final SkillRegistry skillRegistry;
     private final EmbeddingService embeddingService;
@@ -85,12 +92,14 @@ public class EmbeddingSkillSelector implements SkillSelector {
 
         String trimmed = message.trim();
 
-        // 主路径：Embedding 语义匹配
+        // 第一层：Embedding 语义匹配（API 可用时）
         if (!skillEmbeddings.isEmpty()) {
-            return selectByEmbedding(trimmed);
+            Optional<SkillDefinition> result = selectByEmbedding(trimmed);
+            if (result.isPresent()) return result;
+            // Embedding 未过阈值 → 继续走降级兜底
         }
 
-        // 降级路径：description 子串匹配
+        // 第二层：关键词子串匹配（永远可用，兜底保障）
         return selectByKeywords(trimmed);
     }
 
@@ -108,12 +117,12 @@ public class EmbeddingSkillSelector implements SkillSelector {
         } catch (Exception e) {
             log.error("[SkillSelector] 用户消息 Embedding 失败，降级为关键词匹配: {}",
                     e.getMessage());
-            return selectByKeywords(trimmed);
+            return Optional.empty();
         }
 
         if (msgVector.length == 0) {
             log.warn("[SkillSelector] 用户消息 Embedding 为空向量，降级为关键词匹配");
-            return selectByKeywords(trimmed);
+            return Optional.empty();
         }
 
         String bestName = null;
@@ -133,8 +142,9 @@ public class EmbeddingSkillSelector implements SkillSelector {
             return skillRegistry.findEnabledByName(bestName);
         }
 
-        log.debug("[SkillSelector] 未命中任何 Skill: bestScore={}, preview={}",
-                bestScore > 0 ? String.format("%.3f", bestScore) : "N/A", preview(trimmed));
+        // INFO 级别方便排查阈值是否合理
+        log.info("[SkillSelector] Embedding 未过阈值: bestScore={}, threshold={}, preview={}",
+                String.format("%.3f", bestScore), SIMILARITY_THRESHOLD, preview(trimmed));
         return Optional.empty();
     }
 
@@ -188,8 +198,8 @@ public class EmbeddingSkillSelector implements SkillSelector {
             String trimmed = segment.trim();
             if (trimmed.length() < 2) continue;
 
-            // 完整片段命中
-            if (normalizedMessage.contains(trimmed)) {
+            // 完整片段命中（不在黑名单中）
+            if (!KEYWORD_BLACKLIST.contains(trimmed) && normalizedMessage.contains(trimmed)) {
                 maxLen = Math.max(maxLen, trimmed.length());
                 continue;
             }
@@ -200,6 +210,7 @@ public class EmbeddingSkillSelector implements SkillSelector {
                 for (int len = subMax; len >= 2; len--) {
                     for (int i = 0; i <= trimmed.length() - len; i++) {
                         String sub = trimmed.substring(i, i + len);
+                        if (KEYWORD_BLACKLIST.contains(sub)) continue;
                         if (normalizedMessage.contains(sub)) {
                             maxLen = Math.max(maxLen, len);
                         }
