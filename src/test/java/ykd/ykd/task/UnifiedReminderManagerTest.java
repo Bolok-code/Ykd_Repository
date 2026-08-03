@@ -106,26 +106,26 @@ class UnifiedReminderManagerTest {
     @Test
     void shouldFireOnceTaskAndSendToWechat() throws Exception {
         CountDownLatch sent = new CountDownLatch(1);
-        doAnswer(inv -> { sent.countDown(); return null; })
-                .when(weixinBotService).sendTextToUser(eq("u1"), anyString());
+        doAnswer(inv -> { sent.countDown(); return true; })
+                .when(weixinBotService).sendTextWithResult(eq("u1"), anyString());
 
         manager.scheduleOnce("u1", "快到了", "1秒后", false);
         assertThat(sent.await(5, TimeUnit.SECONDS)).isTrue();
 
-        verify(weixinBotService).sendTextToUser(eq("u1"), org.mockito.ArgumentMatchers.contains("快到了"));
+        verify(weixinBotService).sendTextWithResult(eq("u1"), org.mockito.ArgumentMatchers.contains("快到了"));
         assertThat(manager.listTasks("u1")).isEqualTo("当前没有待执行的提醒");
     }
 
     @Test
     void shouldSendDirectlyWithoutLLM() throws Exception {
         CountDownLatch sent = new CountDownLatch(1);
-        doAnswer(inv -> { sent.countDown(); return null; })
-                .when(weixinBotService).sendTextToUser(eq("u1"), anyString());
+        doAnswer(inv -> { sent.countDown(); return true; })
+                .when(weixinBotService).sendTextWithResult(eq("u1"), anyString());
 
         manager.scheduleOnce("u1", "直接提醒", "1秒后", false);
         assertThat(sent.await(5, TimeUnit.SECONDS)).isTrue();
 
-        verify(weixinBotService).sendTextToUser(eq("u1"), org.mockito.ArgumentMatchers.contains("直接提醒"));
+        verify(weixinBotService).sendTextWithResult(eq("u1"), org.mockito.ArgumentMatchers.contains("直接提醒"));
     }
 
     @Test

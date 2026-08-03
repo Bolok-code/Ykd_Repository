@@ -1,11 +1,7 @@
 package ykd.ykd.wxbot;
 
-
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
@@ -20,14 +16,21 @@ public class BotController {
         this.weixinBotService = weixinBotService;
     }
 
-    @GetMapping("/bot/login")
-    public Map<String, Object> login() {
+    @PostMapping("/bot/login")
+    public Map<String, Object> login(@RequestBody(required = false) Map<String, String> body) {
+        String botUserId = (body != null) ? body.get("botUserId") : null;
+        if (botUserId == null || botUserId.isBlank()) {
+            botUserId = "bot-" + System.currentTimeMillis();
+        }
         try {
-            String qrUrl = weixinBotService.login();
+            if (weixinBotService.isOnline(botUserId)) {
+                return Map.of("success", false, "message", "该账号已在线: " + botUserId);
+            }
+            String qrUrl = weixinBotService.login(botUserId);
             if (qrUrl != null) {
-                return Map.of("success", true, "qrUrl", qrUrl, "message", "请扫码登录");
+                return Map.of("success", true, "botUserId", botUserId, "qrUrl", qrUrl, "message", "请扫码登录");
             } else {
-                return Map.of("success", true, "message", "Session 已恢复，无需扫码");
+                return Map.of("success", true, "botUserId", botUserId, "message", "Session 已恢复，无需扫码");
             }
         } catch (Exception e) {
             log.error("登录失败", e);
@@ -36,11 +39,10 @@ public class BotController {
     }
 
     @PostMapping("/bot/disconnect")
-    public Map<String, Object> disconnect() {
+    public Map<String, Object> disconnect(@RequestParam String botUserId) {
         try {
-            weixinBotService.stop();
-            weixinBotService.deleteSession();
-            return Map.of("success", true, "message", "已断开连接");
+            weixinBotService.disconnect(botUserId);
+            return Map.of("success", true, "message", "已断开连接: " + botUserId);
         } catch (Exception e) {
             log.error("断开连接失败", e);
             return Map.of("success", false, "message", "断开失败: " + e.getMessage());
@@ -49,6 +51,10 @@ public class BotController {
 
     @GetMapping("/bot/status")
     public Map<String, Object> status() {
-        return Map.of("connected", weixinBotService.hasSavedSession());
+        return Map.of(
+                "online", weixinBotService.hasAnyOnline(),
+                "botUsers", weixinBotService.getActiveBotUsers(),
+                "pendingUsers", weixinBotService.getPendingBotUsers()
+        );
     }
 }

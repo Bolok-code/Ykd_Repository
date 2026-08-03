@@ -26,6 +26,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
@@ -50,6 +51,7 @@ public class UnifiedReminderManager {
     private final WeixinBotService weixinBotService;
     private final ThreadPoolTaskScheduler taskScheduler = new ThreadPoolTaskScheduler();
     private final Map<String, ReminderTask> tasks = new ConcurrentHashMap<>();
+    private final Set<String> pausedTaskIds = ConcurrentHashMap.newKeySet();
 
     public UnifiedReminderManager(@Lazy LlmService llmService,
                                    @Qualifier("deepseekClient") ChatClient deepseekClient,
@@ -89,7 +91,7 @@ public class UnifiedReminderManager {
     }
 
     @EventListener(LoginReadyEvent.class)
-    public void onLoginReady() {
+    public void onLoginReady(LoginReadyEvent event) {
         recover();
     }
 
@@ -324,10 +326,19 @@ public class UnifiedReminderManager {
     }
 
     private void fireDirect(ReminderTask task) {
-        weixinBotService.sendTextToUser(task.userId, "⏰ 提醒：" + task.message);
+        if (pausedTaskIds.contains(task.taskId)) {
+            return;
+        }
+        boolean ok = weixinBotService.sendTextWithResult(task.userId, "⏰ 提醒：" + task.message);
+        if (!ok) {
+            pauseTask(task);
+        }
     }
 
     private void fireWithLLM(ReminderTask task) {
+        if (pausedTaskIds.contains(task.taskId)) {
+            return;
+        }
         userContext.executeAs(task.userId, () -> {
             try {
                 String prompt = "⏰ 定时提醒：" + task.message;
@@ -340,6 +351,54 @@ public class UnifiedReminderManager {
                 weixinBotService.sendTextToUser(task.userId, "⏰ 提醒：" + task.message);
             }
         });
+    }
+
+    // ── Pause / Resume ──────────────────────────────────────
+
+    private void pauseTask(ReminderTask task) {
+        pausedTaskIds.add(task.taskId);
+        if (task.future != null) {
+            task.future.cancel(false);
+        }
+        log.warn("[Reminder] 协议过期，暂停任务: taskId={}, userId={}, msg={}", task.taskId, task.userId, task.message);
+        try {
+            weixinBotService.sendTextToUser(task.userId, "⏰ 定时任务已暂停（协议过期），发任意消息自动恢复");
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * 恢复指定用户的所有暂停任务。用户发消息时调用。
+     */
+    public void resumeAllForUser(String userId) {
+        List<ReminderTask> toResume = tasks.values().stream()
+                .filter(t -> t.userId.equals(userId) && pausedTaskIds.contains(t.taskId))
+                .toList();
+        if (toResume.isEmpty()) return;
+        log.info("[Reminder] 恢复暂停任务: userId={}, count={}", userId, toResume.size());
+        for (ReminderTask task : toResume) {
+            pausedTaskIds.remove(task.taskId);
+            rescheduleTask(task);
+        }
+        try {
+            weixinBotService.sendTextToUser(userId, "✅ 定时任务已恢复，共" + toResume.size() + "个");
+        } catch (Exception ignored) {}
+    }
+
+    private void rescheduleTask(ReminderTask task) {
+        try {
+            ScheduledFuture<?> future = switch (task.taskType) {
+                case "INTERVAL" -> taskScheduler.scheduleAtFixedRate(
+                        () -> fire(task),
+                        Instant.now().plusSeconds(task.intervalSeconds),
+                        Duration.ofSeconds(task.intervalSeconds));
+                case "CRON" -> taskScheduler.schedule(
+                        () -> fire(task), new CronTrigger(task.cronExpression));
+                default -> null;
+            };
+            task.future = future;
+        } catch (Exception e) {
+            log.error("[Reminder] 恢复任务失败: taskId={}", task.taskId, e);
+        }
     }
 
     // ── Parsing ───────────────────────────────────────────────

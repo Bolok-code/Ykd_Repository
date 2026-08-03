@@ -6,7 +6,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-
+/*"已经有数据的库"补字段，不用删库重建*/
 @Slf4j
 @Component
 public class SchemaMigration {

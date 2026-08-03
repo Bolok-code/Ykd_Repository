@@ -16,12 +16,16 @@ import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.rag.tools.KnowledgeBaseTools;
 import ykd.ykd.skill.model.SkillDefinition;
+import ykd.ykd.skill.registry.SkillRegistry;
 import ykd.ykd.skill.selector.SkillSelector;
+import ykd.ykd.skill.session.SkillSessionManager;
+import ykd.ykd.skill.session.SkillSessionManager.SkillSession;
 import ykd.ykd.skill.tool.SkillToolResolver;
 
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -45,12 +49,16 @@ import java.util.Optional;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class LlmServiceImpl implements LlmService {
+
+    /** Skill 会话保持 10 分钟，多轮对话中不会因单条消息无关键词而丢失 */
+    private static final long SKILL_TTL_MS = 10 * 60 * 1000;
 
     private final ReminderInterceptor reminderInterceptor;
     private final SkillSelector skillSelector;
     private final SkillToolResolver skillToolResolver;
+    private final SkillRegistry skillRegistry;
+    private final SkillSessionManager skillSessionManager;
     private final MemoryManagerService memoryManagerService;
 
     private final WebSearchTools webSearchTools;
@@ -67,6 +75,46 @@ public class LlmServiceImpl implements LlmService {
     private final DocumentTools documentTools;
     private final KnowledgeBaseTools knowledgeBaseTools;
 
+    public LlmServiceImpl(ReminderInterceptor reminderInterceptor,
+                          SkillSelector skillSelector,
+                          SkillToolResolver skillToolResolver,
+                          SkillRegistry skillRegistry,
+                          SkillSessionManager skillSessionManager,
+                          MemoryManagerService memoryManagerService,
+                          WebSearchTools webSearchTools,
+                          LinkTools linkTools,
+                          WeatherTools weatherTools,
+                          ImageTools imageTools,
+                          VideoTools videoTools,
+                          VoiceTools voiceTools,
+                          ReminderTools reminderTools,
+                          LocationTools locationTools,
+                          CalculatorTools calculatorTools,
+                          TranslateTools translateTools,
+                          EmailTools emailTools,
+                          DocumentTools documentTools,
+                          KnowledgeBaseTools knowledgeBaseTools) {
+        this.reminderInterceptor = reminderInterceptor;
+        this.skillSelector = skillSelector;
+        this.skillToolResolver = skillToolResolver;
+        this.skillRegistry = skillRegistry;
+        this.skillSessionManager = skillSessionManager;
+        this.memoryManagerService = memoryManagerService;
+        this.webSearchTools = webSearchTools;
+        this.linkTools = linkTools;
+        this.weatherTools = weatherTools;
+        this.imageTools = imageTools;
+        this.videoTools = videoTools;
+        this.voiceTools = voiceTools;
+        this.reminderTools = reminderTools;
+        this.locationTools = locationTools;
+        this.calculatorTools = calculatorTools;
+        this.translateTools = translateTools;
+        this.emailTools = emailTools;
+        this.documentTools = documentTools;
+        this.knowledgeBaseTools = knowledgeBaseTools;
+    }
+
     /**
      * 处理用户消息，返回 LLM 回复。
      *
@@ -79,6 +127,11 @@ public class LlmServiceImpl implements LlmService {
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId) {
         return chat(text, imageUrls, client, userId, null);
+    }
+
+    @Override
+    public boolean exitSkill(String userId) {
+        return skillSessionManager.remove(userId) != null;
     }
 
     @Override
@@ -95,6 +148,10 @@ public class LlmServiceImpl implements LlmService {
         String intercepted = reminderInterceptor.tryIntercept(text, userId);
         if (intercepted != null) return intercepted;
 
+        // 手动退出 Skill 指令，必须在 pickSkill 之前拦截（"退出猎聘"会命中猎聘关键词）
+        String exitResult = tryExitSkill(text, userId);
+        if (exitResult != null) return exitResult;
+
         String finalText = text;
         log.info("[LLM] 请求开始: userId={}, text={}, imageCount={}",
                 userId, abbrev(finalText, 100), hasImages ? imageUrls.size() : 0);
@@ -103,11 +160,10 @@ public class LlmServiceImpl implements LlmService {
             // 1. 加载当前用户的对话历史
             List<Message> history = memoryManagerService.getHistory(userId);
             // 2. Skill 匹配（图片消息不匹配 Skill，走视觉模型独立处理）
-            //    Skill 路由仅使用 finalText（用户原话），不包含系统上下文，
-            //    避免文档内容中的关键词误触发 Skill。
+            //    优先级: 关键词命中 > 会话保持（10 分钟 TTL） > 无 Skill
             Optional<SkillDefinition> selectedSkill = hasImages
                     ? Optional.empty()
-                    : skillSelector.select(finalText);
+                    : pickSkill(finalText, userId);
 
             // 3. 构建请求消息列表（复制历史，避免 Skill 提示词被写入长期记忆）
             List<Message> requestMessages = new ArrayList<>(history);
@@ -117,7 +173,9 @@ public class LlmServiceImpl implements LlmService {
                 requestMessages.add(new SystemMessage(systemContext));
                 log.debug("[LLM] 已注入系统上下文: length={}", systemContext.length());
             }
+            // 激活或续期 Skill 会话
             selectedSkill.ifPresent(skill -> {
+                skillSessionManager.activate(userId, skill.name());
                 requestMessages.add(0, new SystemMessage(buildSkillPrompt(skill)));
                 log.info("[LLM] 启用Skill: userId={}, skill={}, tools={}",
                         userId, skill.name(), skill.tools().size());
@@ -224,8 +282,62 @@ public class LlmServiceImpl implements LlmService {
     // ── 辅助方法 ──────────────────────────────────────────────
 
     /**
-     * 根据 token 使用量判断是否需要压缩对话历史。
+     * 手动退出 Skill：识别退出指令并清除活跃会话，直接返回回复文本，不走 LLM。
+     * 必须在 pickSkill 之前调用——"退出猎聘"里的"猎聘"会命中 Skill 关键词。
      */
+    private String tryExitSkill(String text, String userId) {
+        if (text == null || text.isBlank()) return null;
+        String trimmed = text.strip();
+        if (trimmed.length() > 10) return null;
+        String normalized = trimmed.toLowerCase(Locale.ROOT).replace(" ", "");
+        if (isExitCommand(normalized)) {
+            SkillSession removed = skillSessionManager.remove(userId);
+            if (removed != null) {
+                log.info("[LLM] 手动退出Skill: userId={}, skill={}", userId, removed.skillName());
+                return "已退出" + removed.skillName() + "技能模式，回到普通对话。";
+            }
+            return "当前没有活跃的技能模式。";
+        }
+        return null;
+    }
+
+    /**
+     * 退出指令匹配（去空格转小写后）。
+     * 容忍"推出"（"退出"常见拼音错别字）、"退出简历skill"这类中间词；
+     * 全程锚定，避免"取消投递""退出投递计划"等计划管理指令被误拦截。
+     */
+    private static boolean isExitCommand(String normalized) {
+        return normalized.matches(
+                "^(退出|推出)(skill|技能|猎聘|投递|求职|搜索|简历)(skill|技能)?$"
+                        + "|^(关闭|结束)(skill|技能|猎聘|投递|求职|搜索)$"
+                        + "|^(取消技能|exit|quit|/exit|/quit)$");
+    }
+
+    /**
+     * Skill 选择策略: 关键词命中 > 会话保持(TTL) > 无 Skill。
+     * 多轮对话中不会因单条消息缺关键词而丢失 Skill 上下文。
+     */
+    private Optional<SkillDefinition> pickSkill(String text, String userId) {
+        // 优先关键词匹配
+        Optional<SkillDefinition> matched = skillSelector.select(text);
+        if (matched.isPresent()) {
+            log.debug("[LLM] Skill 关键词命中: userId={}, skill={}", userId, matched.get().name());
+            return matched;
+        }
+        // 未命中则检查会话保持
+        SkillSession session = skillSessionManager.get(userId);
+        if (session != null) {
+            long elapsed = System.currentTimeMillis() - session.lastActiveAt();
+            if (elapsed < SKILL_TTL_MS) {
+                return skillRegistry.findEnabledByName(session.skillName());
+            }
+            log.debug("[LLM] Skill 会话过期: userId={}, skill={}, elapsed={}ms",
+                    userId, session.skillName(), elapsed);
+            skillSessionManager.remove(userId);
+        }
+        return Optional.empty();
+    }
+
     private void compressIfNeeded(String userId, ChatResponse response) {
         Usage usage = response.getMetadata().getUsage();
         if (usage != null) {

@@ -165,7 +165,7 @@ public class LiepinJobTaskManager {
 
     /**
      * 确认投递候选列表中的某个职位。
-     * 提交单个职位到工作线程，点击"聊一聊"发起投递（猎聘自动发送预置招呼语）。
+     * 提交单个职位的申请到工作线程，发起聊一聊并发送简历。
      */
     public String confirmApplication(String userId, int candidateIndex) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
@@ -174,15 +174,20 @@ public class LiepinJobTaskManager {
                 && !LiepinTaskStatus.NEEDS_USER_ACTION.name().equals(task.getStatus())) {
             return "当前任务状态为 " + task.getStatus() + "，还不能提交岗位。";
         }
+        LiepinResume resume = resumeService.find(userId);
+        if (resume == null) return "还没有保存简历，请先发送简历文件。";
         List<LiepinJobPosting> jobs = postingMapper.findByTaskId(task.getId());
         if (candidateIndex < 1 || candidateIndex > jobs.size()) {
             return "候选序号无效，当前共有 " + jobs.size() + " 个岗位。";
         }
         LiepinJobPosting posting = jobs.get(candidateIndex - 1);
         postingMapper.updateStatus(posting.getId(), "SUBMITTING");
-        update(task, LiepinTaskStatus.SUBMITTING, "正在投递候选岗位 #" + candidateIndex);
-        executor.submit(() -> runApplication(task, posting));
-        return "已确认候选岗位 " + candidateIndex + "，后台正在点击\"聊一聊\"发起投递。结果会主动通知你。";
+        update(task, LiepinTaskStatus.SUBMITTING, "正在提交候选岗位 #" + candidateIndex + "（含简历）");
+        executor.submit(() -> runApplication(task, posting, resume));
+        // 返回实际解析到的岗位信息，LLM 播报时以返回值为准，避免凭记忆报错岗位
+        return "已确认候选岗位 #" + candidateIndex + "：" + posting.getJobName()
+                + "｜" + posting.getCompanyName()
+                + "，后台正在打开猎聘沟通并发送简历。结果会主动通知你。";
     }
 
     /** 取消最新搜索任务。 */
@@ -332,6 +337,8 @@ public class LiepinJobTaskManager {
                     update(task, LiepinTaskStatus.NEEDS_USER_ACTION, result.message());
                     return;
                 }
+                // 模拟人类浏览间隔，3~8 秒随机延迟，降低风控触发概率
+                try { Thread.sleep(3000 + (long)(Math.random() * 5000)); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             }
 
             int consecutive = succeeded > 0 ? 0 : latest.getConsecutiveFailures() + (failed > 0 ? 1 : 0);
@@ -432,34 +439,33 @@ public class LiepinJobTaskManager {
         }
     }
 
-    /**
-     * 执行单个职位的投递：点击"聊一聊"发起沟通（猎聘自动发送预置招呼语）。
-     * 对齐 get_jobs 的猎聘投递模型：点"聊一聊"→ 等待聊天窗口打开 → 关闭 → 标记已投递。
-     */
-    private void runApplication(LiepinJobTask task, LiepinJobPosting posting) {
+    /** 执行单个职位的申请：聊一聊 + 发送简历（AUTO 模式，先在线后附件兜底）。 */
+    private void runApplication(LiepinJobTask task, LiepinJobPosting posting, LiepinResume resume) {
         try {
-            LiepinApplicationResult result = browser.apply(posting, posting.getGreeting());
+            log.info("[LiepinJob] 手动投递: taskId={}, postingId={}, job=\"{}\", company=\"{}\"",
+                    task.getId(), posting.getId(), posting.getJobName(), posting.getCompanyName());
+            LiepinApplicationResult result = browser.applyAndSendResume(
+                    posting, resume, ResumeDeliveryMode.AUTO, posting.getGreeting());
             if (result.success()) {
                 postingMapper.updateStatus(posting.getId(), "SUBMITTED");
-                // 手动搜索任务保持可确认状态，允许用户继续投递其他候选岗位
-                update(task, LiepinTaskStatus.WAITING_CONFIRMATION,
-                        "候选岗位已投递，可继续确认其他岗位");
+                update(task, LiepinTaskStatus.SUCCEEDED, result.message());
                 notifyUser(task.getUserId(), "猎聘投递结果：" + result.message());
+                log.info("[LiepinJob] 手动投递成功: taskId={}, postingId={}, job=\"{}\"",
+                        task.getId(), posting.getId(), posting.getJobName());
             } else if (result.needsUserAction()) {
                 postingMapper.updateStatus(posting.getId(), "NEEDS_USER_ACTION");
                 update(task, LiepinTaskStatus.NEEDS_USER_ACTION, result.message());
                 notifyUser(task.getUserId(), "猎聘任务需要你处理：" + result.message());
             } else {
                 postingMapper.updateStatus(posting.getId(), "FAILED");
-                // 单个岗位失败不结束整个任务，允许用户改选其他候选
-                update(task, LiepinTaskStatus.WAITING_CONFIRMATION,
-                        "岗位投递失败，可重新确认其他候选岗位：" + result.message());
+                update(task, LiepinTaskStatus.FAILED, result.message());
                 notifyUser(task.getUserId(), "猎聘投递失败：" + result.message());
             }
         } catch (Exception e) {
-            log.error("[LiepinJob] 投递任务失败: taskId={}, postingId={}", task.getId(), posting.getId(), e);
+            log.error("[LiepinJob] 手动投递异常: taskId={}, postingId={}, job=\"{}\", error={}",
+                    task.getId(), posting.getId(), posting.getJobName(), e.getMessage(), e);
             postingMapper.updateStatus(posting.getId(), "FAILED");
-            update(task, LiepinTaskStatus.WAITING_CONFIRMATION, "岗位投递异常，可重新确认其他候选岗位");
+            update(task, LiepinTaskStatus.FAILED, e.getMessage());
             notifyUser(task.getUserId(), "猎聘投递失败：" + friendlyError(e));
         }
     }

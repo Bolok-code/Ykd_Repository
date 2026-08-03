@@ -29,4 +29,9 @@ public interface LlmService {
      * @param systemContext 系统消息上下文（文档内容等）；为 {@code null} 时不注入
      */
     String chat(String text, List<String> imageUrls, ChatClient client, String userId, String systemContext);
+
+    /**
+     * 手动清除指定用户的活跃 Skill 会话，返回是否确实存在活跃会话。
+     */
+    boolean exitSkill(String userId);
 }

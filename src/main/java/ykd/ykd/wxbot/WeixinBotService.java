@@ -1,419 +1,243 @@
 package ykd.ykd.wxbot;
 
 import tools.jackson.databind.ObjectMapper;
-import com.github.wechat.ilink.sdk.ILinkClient;
-import com.github.wechat.ilink.sdk.core.context.ResumeContext;
-import com.github.wechat.ilink.sdk.core.exception.SessionExpiredException;
-import com.github.wechat.ilink.sdk.core.listener.OnLoginListener;
-import com.github.wechat.ilink.sdk.core.login.LoginContext;
-import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
-import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
-import ykd.ykd.processor.PerUserTaskDispatcher;
-import ykd.ykd.processor.ProcessResult;
+import ykd.ykd.task.UnifiedReminderManager;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 微信 iLink 智能机器人服务。
+ * 微信 iLink 智能机器人服务（多用户版）。
  *
- * <p>启动后通过二维码扫码登录微信，监听用户消息，将消息交由 {@link MessageProcessor} 处理，
- * 并将处理结果（文本/图片）发送给用户。支持 Session 持久化，重启后自动恢复登录。</p>
+ * <p>管理多个 {@link BotSession} 实例，每个微信 bot 账号独立登录、独立轮询。
+ * 启动时自动恢复所有已保存的 session，也支持通过 API 为新用户创建 session。</p>
  */
 @Slf4j
 @Service
 public class WeixinBotService {
 
-    private static final Path SESSION_FILE = Paths.get("work", "ilink-session.json");
-    private static final long RETRY_DELAY_MS = 2_000L;
+    private static final Path SESSION_DIR = Paths.get("work", "bot-sessions");
 
-    private final MessageProcessor messageProcessor;
-    private final MemoryManagerService memoryManagerService;
     private final ObjectMapper objectMapper;
-    private final PerUserTaskDispatcher dispatcher;
+    private final MessageProcessor messageProcessor;
+    private final UnifiedReminderManager reminderManager;
     private final ApplicationEventPublisher eventPublisher;
 
-    private ILinkClient client;
-    private volatile boolean running = true;
-    private final AtomicBoolean pollingStarted = new AtomicBoolean(false);
-    private final Map<String, Long> lastSendTime = new ConcurrentHashMap<>();
-    private static final long MIN_SEND_INTERVAL_MS = 2_000L;
-    private final CountDownLatch loginReady = new CountDownLatch(1);
+    /** 已登录在线的 session：botUserId → BotSession */
+    private final Map<String, BotSession> sessions = new ConcurrentHashMap<>();
 
-    public WeixinBotService(MessageProcessor messageProcessor, MemoryManagerService memoryManagerService,
-                            ObjectMapper objectMapper, ApplicationEventPublisher eventPublisher) {
-        this.messageProcessor = messageProcessor;
-        this.memoryManagerService = memoryManagerService;
+    /** 等待扫码的 session：botUserId → BotSession（扫码成功后移到 sessions） */
+    private final Map<String, BotSession> pendingSessions = new ConcurrentHashMap<>();
+
+    public WeixinBotService(ObjectMapper objectMapper, MessageProcessor messageProcessor,
+                            @Lazy UnifiedReminderManager reminderManager,
+                            ApplicationEventPublisher eventPublisher) {
         this.objectMapper = objectMapper;
+        this.messageProcessor = messageProcessor;
+        this.reminderManager = reminderManager;
         this.eventPublisher = eventPublisher;
-        this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
     }
 
-    /**
-     * 启动微信机器人。
-     *
-     * <p>优先尝试恢复保存的 Session，若无则生成 QR 码登录。
-     */
-        @PostConstruct
+    // ── 生命周期 ──────────────────────────────────────────────
+
+    @PostConstruct
     public void start() {
-            Thread loginThread = new Thread(()->{
-                if ((hasSavedSession())){
-                    log.info("检测到已保存的 Session，正在恢复微信登录...");
-                }else {
-                    log.info("未检测到Session，正在生成微信登录二维码");
+        try { Files.createDirectories(SESSION_DIR); } catch (IOException e) {
+            log.error("创建 session 目录失败", e);
+        }
+        migrateOldSession();
+
+        Thread startupThread = new Thread(() -> {
+            try (var dirStream = Files.list(SESSION_DIR)) {
+                List<Path> sessionFiles = dirStream
+                        .filter(p -> p.toString().endsWith(".json"))
+                        .toList();
+                log.info("[BotService] 发现 {} 个已保存的 session", sessionFiles.size());
+                for (Path file : sessionFiles) {
+                    String userId = file.getFileName().toString().replace(".json", "");
+                    restoreSession(userId, file);
                 }
-                login();
-            }, "wx-bot-login");
-            loginThread.setDaemon(true);
-            loginThread.start();
+            } catch (IOException e) {
+                log.error("[BotService] 扫描 session 目录失败", e);
+            }
+        }, "wx-bot-startup");
+        startupThread.setDaemon(true);
+        startupThread.start();
     }
 
-    /**
-     * 优雅关闭：停止接收消息 → 排空队列 → 关闭客户端。
-     */
     @PreDestroy
     public void stop() {
-        running = false;
-        dispatcher.close(Duration.ofSeconds(15));
-        closeClient();
-    }
-
-    /**
-     * 检查是否有保存的 Session。
-     */
-    public boolean hasSavedSession() {
-        return Files.exists(SESSION_FILE);
-    }
-
-    public boolean awaitReady(long timeoutSeconds) {
-        try {
-            return loginReady.await(timeoutSeconds, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-    }
-
-    /**
-     * 删除保存的 Session 文件。
-     */
-    public void deleteSession() {
-        try {
-            Files.deleteIfExists(SESSION_FILE);
-        } catch (IOException e) {
-            log.warn("删除 session 文件失败: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * 触发登录，返回 QR 码 URL（需扫码）或 null（Session 已恢复）。
-     */
-    public String login() {
-        running = true;
-        if (client != null) {
-            closeClient();
-        }
-
-        ResumeContext resumeContext = loadSession();
-        boolean needLogin = (resumeContext == null);
-
-        client = ILinkClient.builder()
-                .onLogin(new OnLoginListener() {
-                    @Override
-                    public void onLoginSuccess(LoginContext ctx) {
-                        log.info("微信登录成功: botId={}", ctx.getBotId());
-                        if (client != null) {
-                            saveSession(client.exportResumeContext());
-                        }
-                        loginReady.countDown();
-                        eventPublisher.publishEvent(new LoginReadyEvent());
-                        startPolling();
-                    }
-
-                    @Override
-                    public void onLoginFailure(Throwable throwable) {
-                        log.error("微信登录失败: {}", throwable.getMessage());
-                    }
-                })
-                .build();
-
-        if (resumeContext != null) {
-            client = ILinkClient.builder()
-                    .onLogin(new OnLoginListener() {
-                        @Override
-                        public void onLoginSuccess(LoginContext ctx) {
-                            log.info("Session 恢复成功: botId={}", ctx.getBotId());
-                        }
-
-                        @Override
-                        public void onLoginFailure(Throwable throwable) {
-                            log.error("Session 恢复失败: {}", throwable.getMessage());
-                        }
-                    })
-                    .resumeContext(resumeContext)
-                    .build();
-            loginReady.countDown();
-            eventPublisher.publishEvent(new LoginReadyEvent());
-            startPolling();
-            return null;
-        }
-
-        try {
-            String qrCodeContent = client.executeLogin();
-            log.info("请扫码登录: {}", qrCodeContent);
-            return qrCodeContent;
-        } catch (Exception e) {
-            log.error("获取 QR 码失败", e);
-            return null;
-        }
-    }
-
-    /**
-     * 消息处理入口：通过 PerUserTaskDispatcher 提交任务，保证每用户串行执行。
-     */
-    private void handleMessage(WeixinMessage msg) {
-        log.info("📩 [Bot] 收到微信消息: from={}, msgId={}", msg.getFrom_user_id(), msg.getMessage_id());
-        String userId = msg.getFrom_user_id();
-
-        boolean accepted = dispatcher.submit(userId, () -> {
-            ProcessResult result = messageProcessor.process(msg, client);
-            if (result == null) {
-                return;
-            }
-            sendResult(result);
-        });
-
-        if (!accepted) {
-            log.warn("任务队列已满，拒绝用户消息: userId={}", userId);
-            safeSendText(userId, "⏳ 当前消息过多，请稍后再试");
-        }
-    }
-
-    private void sendResult(ProcessResult result) {
-        switch (result.type()) {
-            case IMAGE -> safeSendImage(result.userId(), result.data());
-            case VIDEO -> safeSendVideo(result.userId(), result.data());
-            case VOICE -> safeSendVoice(result.userId(), result.data());
-            case TEXT -> safeSendText(result.userId(), result.text());
-        }
-    }
-
-    private void safeSendText(String userId, String text) {
-        long now = System.currentTimeMillis();
-        Long last = lastSendTime.get(userId);
-        if (last != null) {
-            long gap = now - last;
-            if (gap < MIN_SEND_INTERVAL_MS) {
-                sleep(MIN_SEND_INTERVAL_MS - gap);
+        log.info("[BotService] 正在关闭所有 BotSession: online={}, pending={}",
+                sessions.size(), pendingSessions.size());
+        for (BotSession session : sessions.values()) {
+            try { session.close(); } catch (Exception e) {
+                log.warn("[BotService] 关闭 BotSession 异常: {}", e.getMessage());
             }
         }
-        try {
-            client.sendText(userId, text);
-            lastSendTime.put(userId, System.currentTimeMillis());
-        } catch (Exception e) {
-            log.error("[Bot] 发送文本失败: userId={}", userId, e);
+        for (BotSession session : pendingSessions.values()) {
+            try { session.close(); } catch (Exception e) {
+                log.warn("[BotService] 关闭 pending BotSession 异常: {}", e.getMessage());
+            }
+        }
+        sessions.clear();
+        pendingSessions.clear();
+    }
+
+    // ── 公共 API ──────────────────────────────────────────────
+
+    /**
+     * 为指定 botUserId 创建新 session 并登录，返回 QR 码 URL。
+     * session 先放入 pendingSessions，扫码成功后自动移到 sessions。
+     */
+    public String login(String botUserId) {
+        if (botUserId == null || botUserId.isBlank()) return null;
+        if (sessions.containsKey(botUserId) || pendingSessions.containsKey(botUserId)) {
+            log.info("[BotService] 用户 {} 已有活跃或等待中的 session，跳过", botUserId);
+            return null;
+        }
+        return createAndStartSession(botUserId, sessionDir(botUserId));
+    }
+
+    public Optional<BotSession> getSession(String botUserId) {
+        return Optional.ofNullable(sessions.get(botUserId));
+    }
+
+    public Optional<BotSession> getAnySession() {
+        return sessions.values().stream().findFirst();
+    }
+
+    /** 已登录在线的 botUserId 列表 */
+    public List<String> getActiveBotUsers() {
+        return new ArrayList<>(sessions.keySet());
+    }
+
+    /** 等待扫码的 botUserId 列表 */
+    public List<String> getPendingBotUsers() {
+        return new ArrayList<>(pendingSessions.keySet());
+    }
+
+    public boolean isOnline(String botUserId) {
+        return sessions.containsKey(botUserId);
+    }
+
+    public boolean hasAnyOnline() {
+        return !sessions.isEmpty();
+    }
+
+    public void disconnect(String botUserId) {
+        BotSession session = sessions.remove(botUserId);
+        if (session == null) session = pendingSessions.remove(botUserId);
+        if (session != null) {
+            session.close();
+            session.deleteSession();
+            log.info("[BotService] 已断开用户 {} 的 session", botUserId);
         }
     }
 
     public void sendTextToUser(String userId, String text) {
-        safeSendText(userId, text);
+        getAnySession().ifPresent(s -> s.safeSendText(userId, text));
     }
 
-    private void safeSendImage(String userId, byte[] imageData) {
+    public boolean sendTextWithResult(String userId, String text) {
+        return getAnySession().map(s -> s.sendTextWithResult(userId, text)).orElse(false);
+    }
+
+    public boolean awaitReady(long timeoutSeconds) {
+        return getAnySession().map(s -> s.awaitReady(timeoutSeconds)).orElse(false);
+    }
+
+    // ── 内部方法 ──────────────────────────────────────────────
+
+    /**
+     * 扫码成功回调：从 pendingSessions 移到 sessions。
+     */
+    private void onSessionReady(String botUserId) {
+        BotSession session = pendingSessions.remove(botUserId);
+        if (session != null) {
+            sessions.put(botUserId, session);
+            log.info("[BotService] 用户 {} 扫码成功，已上线（当前在线: {}）", botUserId, sessions.size());
+        }
+        eventPublisher.publishEvent(new LoginReadyEvent(botUserId));
+    }
+
+    private void restoreSession(String botUserId, Path sessionFile) {
         try {
-            client.sendImage(userId, imageData, "image.png", "");
-            log.info("[Bot] 图片发送成功: userId={}, size={}KB", userId, imageData.length / 1024);
+            BotSession session = new BotSession(botUserId, sessionFile, objectMapper,
+                    messageProcessor, reminderManager,
+                    () -> onSessionReady(botUserId));
+            // 恢复的 session 直接放入 sessions（session 文件已存在，无需扫码）
+            sessions.put(botUserId, session);
+            String qr = session.login();
+            if (qr == null) {
+                log.info("[BotService] 已恢复用户 {} 的 session", botUserId);
+            } else {
+                // 恢复失败，需要重新扫码，移到 pending
+                sessions.remove(botUserId);
+                pendingSessions.put(botUserId, session);
+                log.info("[BotService] 用户 {} session 恢复失败，等待重新扫码", botUserId);
+            }
         } catch (Exception e) {
-            log.error("[Bot] 发送图片失败: userId={}", userId, e);
-        }
-    }
-
-    private void safeSendVoice(String userId, byte[] voiceData) {
-        try {
-            client.sendFile(userId, voiceData, "voice.mp3", null);
-            log.info("[Bot] 语音文件发送成功: userId={}, size={}KB", userId, voiceData.length / 1024);
-        } catch (Exception e) {
-            log.error("[Bot] 发送语音失败: userId={}", userId, e);
-        }
-    }
-
-    private void safeSendVideo(String userId, byte[] videoData) {
-        try {
-            client.sendVideo(userId, videoData, "video.mp4", 0, "视频");
-            log.info("[Bot] 视频发送成功: userId={}, size={}KB", userId, videoData.length / 1024);
-        } catch (Exception e) {
-            log.error("[Bot] 发送视频失败: userId={}", userId, e);
-        }
-    }
-
-    private void sendCompletedImageBatch() {
-        ProcessResult result = messageProcessor.pollCompletedImageBatch();
-        while (result != null) {
-            log.info("[Bot] 推送图片批次结果: userId={}", result.userId());
-            safeSendText(result.userId(), result.text());
-            result = messageProcessor.pollCompletedImageBatch();
-        }
-    }
-
-    private void sendCompletedLiepinTask() {
-        ProcessResult result = messageProcessor.pollCompletedLiepinTask();
-        while (result != null) {
-            log.info("[Bot] 推送猎聘求职任务结果: userId={}", result.userId());
-            safeSendText(result.userId(), result.text());
-            result = messageProcessor.pollCompletedLiepinTask();
-        }
-    }
-    private void sendCompletedVideo() {
-        ProcessResult result = messageProcessor.pollCompletedVideo();
-        while (result != null) {
-            log.info("[Bot] 推送后台完成的视频: userId={}", result.userId());
-            safeSendVideo(result.userId(), result.data());
-            result = messageProcessor.pollCompletedVideo();
-        }
-    }
-
-    // ===== Session 持久化 =====
-
-    private void saveSession(ResumeContext resumeContext) {
-        if (resumeContext == null || resumeContext.getLoginContext() == null) {
-            return;
-        }
-        LoginContext login = resumeContext.getLoginContext();
-        SessionData data = new SessionData(
-                login.getBotToken(), login.getUserId(), login.getBotId(),
-                login.getBaseUrl(), resumeContext.getUpdatesCursor());
-        try {
-            Files.createDirectories(SESSION_FILE.getParent());
-            Files.writeString(SESSION_FILE, objectMapper.writeValueAsString(data), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("保存 session 失败: {}", e.getMessage());
+            log.error("[BotService] 恢复 session 失败: userId={}", botUserId, e);
         }
     }
 
     /**
-     * 从本地文件加载持久化的 iLink 会话。
-     *
-     * <p>文件不存在或内容无效时返回 {@code null}，由调用方回退到扫码登录。</p>
-     *
-     * @return 可恢复的 {@link ResumeContext}，无法恢复时返回 {@code null}
+     * 创建新 session，放入 pendingSessions，等待扫码。
      */
-    private ResumeContext loadSession() {
-        if (!Files.exists(SESSION_FILE)) {
-            return null;
+    private String createAndStartSession(String botUserId, Path sessionFile) {
+        BotSession session = new BotSession(botUserId, sessionFile, objectMapper,
+                messageProcessor, reminderManager,
+                () -> onSessionReady(botUserId));
+        pendingSessions.put(botUserId, session);
+        String qr = session.login();
+        if (qr == null) {
+            // session 文件已恢复成功，直接移到 online
+            pendingSessions.remove(botUserId);
+            sessions.put(botUserId, session);
         }
+        return qr;
+    }
+
+    private void migrateOldSession() {
+        Path oldFile = Paths.get("work", "ilink-session.json");
+        if (!Files.exists(oldFile)) return;
         try {
-            String json = Files.readString(SESSION_FILE, StandardCharsets.UTF_8);
-            SessionData data = objectMapper.readValue(json, SessionData.class);
-            if (data.botToken() == null || data.botToken().isBlank()
-                    || data.botId() == null || data.botId().isBlank()
-                    || data.baseUrl() == null || data.baseUrl().isBlank()) {
-                log.warn("Session 信息不完整，将重新登录");
-                deleteSession();
-                return null;
+            String json = Files.readString(oldFile);
+            var node = objectMapper.readTree(json);
+            String botUserId = node.has("userId") ? node.get("userId").asText() : null;
+            if (botUserId == null || botUserId.isBlank()) {
+                log.warn("[BotService] 旧 session 无 userId，跳过迁移");
+                return;
             }
-            LoginContext loginContext = new LoginContext(
-                    data.botToken(), data.userId(), data.botId(), data.baseUrl());
-            return ResumeContext.builder(loginContext)
-                    .updatesCursor(data.updatesCursor())
-                    .build();
-        } catch (Exception e) {
-            log.warn("无法读取 iLink 会话，将重新登录: {}", e.getMessage());
-            deleteSession();
-            return null;
+            Path newFile = sessionDir(botUserId);
+            if (!Files.exists(newFile)) {
+                Files.createDirectories(newFile.getParent());
+                Files.move(oldFile, newFile);
+                log.info("[BotService] 已迁移旧 session 到: {}", newFile);
+            } else {
+                Files.delete(oldFile);
+                log.info("[BotService] 新 session 已存在，删除旧文件");
+            }
+        } catch (IOException e) {
+            log.warn("[BotService] 旧 session 迁移失败: {}", e.getMessage());
         }
     }
 
-    private void startPolling() {
-        if (!pollingStarted.compareAndSet(false, true)) {
-            log.warn("消息轮询线程已经运行，跳过重复启动");
-            return;
-        }
-
-        Thread pollThread = new Thread(() -> {
-            log.info("消息轮询线程已启动 - 开始监听消息");
-
-            try {
-                while (running) {
-                    try {
-                        ILinkClient currentClient = client;
-
-                        if (currentClient == null) {
-                            log.warn("iLink 客户端为空，停止消息轮询");
-                            break;
-                        }
-
-                        List<WeixinMessage> messages = currentClient.getUpdates();
-                        saveSession(currentClient.exportResumeContext());
-
-                        if (messages != null) {
-                            for (WeixinMessage message : messages) {
-                                handleMessage(message);
-                            }
-                        }
-
-                        sendCompletedVideo();
-                        sendCompletedImageBatch();
-                        sendCompletedLiepinTask();
-
-                    } catch (SessionExpiredException e) {
-                        log.warn("轮询异常-会话过期: {}", e.getMessage());
-                        deleteSession();
-                        break;
-                    } catch (IOException e) {
-                        log.warn("轮询异常-IO: {}", e.getMessage());
-                        if (running) {
-                            sleep(RETRY_DELAY_MS);
-                        }
-                    } catch (Exception e) {
-                        log.error("消息轮询出现异常", e);
-                        if (running) {
-                            sleep(RETRY_DELAY_MS);
-                        }
-                    }
-                }
-            } finally {
-                pollingStarted.set(false);
-                log.info("消息轮询线程已停止");
-            }
-        }, "wx-poll");
-
-        pollThread.setDaemon(true);
-        pollThread.start();
-    }
-    private void sleep(long ms) {
-        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-    }
-
-    private void closeClient() {
-        ILinkClient current = client;
-        client = null;
-        if (current != null) {
-            try {
-                current.close();
-            } catch (Exception e) {
-                log.warn("关闭 iLink 客户端异常", e);
-            }
-        }
-    }
-
-    private record SessionData(
-            String botToken, String userId, String botId,
-            String baseUrl, String updatesCursor) {
+    private static Path sessionDir(String botUserId) {
+        return SESSION_DIR.resolve(botUserId + ".json");
     }
 }

@@ -18,6 +18,7 @@ tools:
   - confirmLiepinJobApplication
   - getLiepinJobTaskStatus
   - cancelLiepinJobTask
+  - exitLiepinSkill
 ---
 
 # 猎聘自动求职技能
@@ -87,7 +88,16 @@ tools:
 5. 用户从候选列表明确确认某个岗位（如“投递第1个”），调用 `confirmLiepinJobApplication`，
    系统会点击该岗位的“聊一聊”按钮发起投递，猎聘会自动发送预置招呼语。
 
-### 四、创建自动投递计划
+### 四、手动确认投递
+
+1. 用户要求投递某个候选岗位前，必须先调用 `listLiepinJobCandidates` 获取最新候选列表，以最新返回的序号和岗位信息为准，不得凭对话记忆中的旧列表判断序号。
+2. 用户明确说出要投递的岗位（如"投递第2个"）后，调用 `confirmLiepinJobApplication` 传入最新列表中的序号。
+3. 只有成功调用 `confirmLiepinJobApplication` 并拿到返回结果后，才能回复"已确认投递/已开始投递"。禁止只凭候选列表自行宣布投递成功，禁止模仿历史回复中的"已确认投递"话术。
+4. 回复用户时，岗位名称、公司、薪资等细节必须以 `confirmLiepinJobApplication` 的返回内容为准，不得自行补充或凭记忆播报。
+5. "已确认投递"只代表后台开始执行，不代表简历已发送成功。最终结果以系统主动推送为准；如果工具返回失败或系统推送失败结果，必须如实告知用户。
+6. 确认后是后台异步投递，完成后系统会主动推送结果。
+
+### 五、创建自动投递计划
 
 1. 确认用户已经保存简历。
 2. 收集完整求职条件。
@@ -95,18 +105,25 @@ tools:
 4. 创建计划后必须向用户展示计划内容。
 5. 创建计划不等于启动计划。
 
-### 五、启动自动投递
+### 六、启动自动投递
 
 1. 只有用户明确说“确认启动”“开始自动投递”等意思时，才允许调用 `startLiepinAutoApplyCampaign`。
 2. “好的”“知道了”“看看”等模糊表达不得视为启动授权。
 3. 启动后按照每日限额、匹配分数、去重规则和执行间隔运行。
 
-### 六、计划管理
+### 七、计划管理
 
 - 用户要求暂停时，调用 `pauseLiepinAutoApplyCampaign`。
 - 用户要求永久停止时，调用 `stopLiepinAutoApplyCampaign`。
 - 用户查询计划状态时，调用 `getLiepinAutoApplyCampaignStatus`。
 - 用户查询投递记录时，调用 `listLiepinAutoApplications`。
+
+### 八、退出技能模式
+
+1. 当用户明确表示退出、关闭或结束求职技能（如"退出技能""退出猎聘""退出简历""退出求职模式"），必须先调用 `exitLiepinSkill` 退出技能模式，再回复用户。
+2. 只有实际调用 `exitLiepinSkill` 并拿到返回，或工具返回中明确提到"已自动退出"时，才能回复用户"技能模式已退出"。禁止凭对话历史推断技能状态并凭空声称已退出。
+3. 取消任务（`cancelLiepinJobTask`）或永久停止计划（`stopLiepinAutoApplyCampaign`）成功后会自动退出技能模式，工具返回中会提示用户。
+4. 退出后用户可进行普通对话（天气、图片等）；用户再次表达求职意图时会重新激活本技能。
 
 ## 安全规则
 
