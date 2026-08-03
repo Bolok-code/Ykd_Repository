@@ -183,10 +183,16 @@ public class MessageProcessor {
                                 fileName, cachedContent);
                         summaryPrompt = "用户刚发送了求职简历，请确认简历要点并引导下一步";
                     } else {
+                        // 非简历文件：不自动总结，先问清楚用户想做什么
                         systemContext = String.format(
-                                "用户发送了文件「%s」，以下是文件内容：\n---\n%s\n---",
-                                fileName, cachedContent);
-                        summaryPrompt = "请给出简要总结";
+                                "用户刚刚发送了一个文件「%s」（%d 字符），文件内容已缓存。\n"
+                                + "请告知用户已收到文件，并询问用户希望如何处理，例如：\n"
+                                + "- 存入知识库以便后续问答\n"
+                                + "- 简要总结文件内容\n"
+                                + "- 其他需求\n"
+                                + "不要直接总结文件内容，先问清楚用户意图。",
+                                fileName, cachedContent.length());
+                        summaryPrompt = String.format("用户发送了文件「%s」。请确认收到文件，并询问用户希望如何处理。", fileName);
                     }
                     String reply = llmService.chat(summaryPrompt, List.of(), deepseekClient, fromUserId, systemContext);
                     result[0] = resumeSaved

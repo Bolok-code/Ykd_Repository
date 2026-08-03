@@ -16,14 +16,20 @@ public class RagProperties {
     private boolean enabled = true;
 
     /**
-     * 单个文本片段最大字符数。
+     * TokenTextSplitter 每个片段的 token 数上限。
+     * 中文约 1.5 字符/token，300 token ≈ 450 汉字。
      */
-    private int chunkSize = 600;
+    private int chunkSize = 300;
 
     /**
-     * 相邻文本片段重复字符数，防止语义被截断。
+     * TokenTextSplitter 片段最少字符数，低于此值会被合并到相邻片段。
      */
-    private int chunkOverlap = 100;
+    private int minChunkSizeChars = 50;
+
+    /**
+     * TokenTextSplitter 单文档最大片段数，防止超大文档撑爆。
+     */
+    private int maxNumChunks = 100;
 
     /**
      * 每次检索返回最相关的片段数量。
@@ -36,16 +42,16 @@ public class RagProperties {
     private int maxContextChars = 6000;
 
     /**
-     * 相似度最低阈值。
-     * 第一版先设为 0，等接入真实 Embedding 模型后再调整。
+     * 相似度最低阈值。低于此值的结果不会出现在检索上下文中。
+     * 0.3 是 text-embedding-v3 经验起步值，后续根据 Top-5 分数日志调整。
      */
-    private double similarityThreshold = 0.0;
+    private double similarityThreshold = 0.3;
 
     /**
      * Embedding 批量请求时每次最多发送多少条文本。
-     * DashScope text-embedding-v3 单次最多 25 条。
+     * OpenAI / DashScope text-embedding-v3 单次最多 10 条。
      */
-    private int embedBatchSize = 25;
+    private int embedBatchSize = 10;
 
     /**
      * 是否在启动时自动扫描目录并入库文档。

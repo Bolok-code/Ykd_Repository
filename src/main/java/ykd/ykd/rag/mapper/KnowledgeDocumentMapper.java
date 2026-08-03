@@ -27,6 +27,19 @@ public interface KnowledgeDocumentMapper {
      */
     @Select("SELECT * FROM knowledge_document WHERE id = #{id}")
     KnowledgeDocument findById(@Param("id") Long id);
+
+    /**
+     * 根据 ID 列表批量查询文档
+     */
+    @Select("""
+        <script>
+        SELECT * FROM knowledge_document WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        </script>
+    """)
+    List<KnowledgeDocument> findByIds(@Param("ids") List<Long> ids);
     
     /**
      * 根据用户 ID 查询所有文档
