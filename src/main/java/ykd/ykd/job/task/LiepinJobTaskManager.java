@@ -165,7 +165,7 @@ public class LiepinJobTaskManager {
 
     /**
      * 确认投递候选列表中的某个职位。
-     * 提交单个职位的申请到工作线程，真正发送简历（在线/附件自动选择）。
+     * 提交单个职位到工作线程，点击"聊一聊"发起投递（猎聘自动发送预置招呼语）。
      */
     public String confirmApplication(String userId, int candidateIndex) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
@@ -174,10 +174,6 @@ public class LiepinJobTaskManager {
                 && !LiepinTaskStatus.NEEDS_USER_ACTION.name().equals(task.getStatus())) {
             return "当前任务状态为 " + task.getStatus() + "，还不能提交岗位。";
         }
-        LiepinResume resume = resumeService.find(userId);
-        if (resume == null || resume.getContent() == null || resume.getContent().isBlank()) {
-            return "还没有保存简历。请先发送 PDF/Word 简历文件，我会自动保存并用于投递。";
-        }
         List<LiepinJobPosting> jobs = postingMapper.findByTaskId(task.getId());
         if (candidateIndex < 1 || candidateIndex > jobs.size()) {
             return "候选序号无效，当前共有 " + jobs.size() + " 个岗位。";
@@ -185,8 +181,8 @@ public class LiepinJobTaskManager {
         LiepinJobPosting posting = jobs.get(candidateIndex - 1);
         postingMapper.updateStatus(posting.getId(), "SUBMITTING");
         update(task, LiepinTaskStatus.SUBMITTING, "正在投递候选岗位 #" + candidateIndex);
-        executor.submit(() -> runApplication(task, posting, resume, ResumeDeliveryMode.AUTO));
-        return "已确认候选岗位 " + candidateIndex + "，后台正在发送简历。结果会主动通知你。";
+        executor.submit(() -> runApplication(task, posting));
+        return "已确认候选岗位 " + candidateIndex + "，后台正在点击\"聊一聊\"发起投递。结果会主动通知你。";
     }
 
     /** 取消最新搜索任务。 */
@@ -436,11 +432,13 @@ public class LiepinJobTaskManager {
         }
     }
 
-    /** 执行单个职位的投递，真正发送简历（在线/附件自动选择）。 */
-    private void runApplication(LiepinJobTask task, LiepinJobPosting posting,
-                                LiepinResume resume, ResumeDeliveryMode mode) {
+    /**
+     * 执行单个职位的投递：点击"聊一聊"发起沟通（猎聘自动发送预置招呼语）。
+     * 对齐 get_jobs 的猎聘投递模型：点"聊一聊"→ 等待聊天窗口打开 → 关闭 → 标记已投递。
+     */
+    private void runApplication(LiepinJobTask task, LiepinJobPosting posting) {
         try {
-            LiepinApplicationResult result = browser.applyAndSendResume(posting, resume, mode, posting.getGreeting());
+            LiepinApplicationResult result = browser.apply(posting, posting.getGreeting());
             if (result.success()) {
                 postingMapper.updateStatus(posting.getId(), "SUBMITTED");
                 // 手动搜索任务保持可确认状态，允许用户继续投递其他候选岗位
