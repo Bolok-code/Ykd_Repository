@@ -61,6 +61,7 @@ ilink-creds.json.sync
 ### 运行时数据 ###
 work/conversation.db
 work/ilink-session.json
+work/liepin/
 config/application-local.yml
 
 /ykd/

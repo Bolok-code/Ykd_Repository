@@ -24,14 +24,16 @@ final class LiepinLocators {
             .job-card-footer,
             .card-footer
             """;
-    static final String CHAT_HEADER = ".__im_basic__header-wrap";
-    static final String CHAT_CLOSE = "div.__im_basic__contacts-title svg";
-    static final String SEND_RESUME_BUTTON = "button:has-text('发简历'), button:has-text('发送简历'), button:has-text('投递简历'), a:has-text('发简历')";
+    static final String CHAT_HEADER = ".im-ui-basic-chat-modal, .im-ui-basic-chat-wrapper";
+    static final String CHAT_INPUT = ".im-ui-chat-input, .im-ui-chat-container";
+    static final String CHAT_CLOSE = ".ant-im-drawer-close, div.__im_basic__contacts-title svg";
+    static final String SEND_RESUME_BUTTON = "span[class*='action-resume'], span:has-text('发简历'), button:has-text('发简历'), button:has-text('发送简历'), button:has-text('投递简历'), a:has-text('发简历')";
     static final String ONLINE_RESUME_OPTION = "text=在线简历, text=发送在线简历, button:has-text('在线简历')";
-    static final String ONLINE_RESUME_CONFIRM = "button:has-text('确认发送'), button:has-text('立即发送'), button:has-text('发送')";
+    // 新 im-ui 版点击发简历后弹出确认框“确定向对方发送简历吗？”，主按钮文字为“确 定”（带空格），用 class 定位
+    static final String ONLINE_RESUME_CONFIRM = ".ant-im-modal-confirm-btns button.ant-im-btn-primary, button:has-text('确认发送'), button:has-text('立即发送'), button:has-text('确 定'), button:has-text('确定')";
     static final String ATTACHMENT_BUTTON = "button:has-text('附件简历'), text=附件简历, [class*='file-upload'], [class*='attachment']";
-    static final String ATTACHMENT_FILE_INPUT = "input[type='file']";
-    static final String ATTACHMENT_SEND_BUTTON = "button:has-text('发送附件'), button:has-text('发送文件'), button:has-text('发送')";
+    static final String ATTACHMENT_FILE_INPUT = "input[type='file']:not([accept*='image']), input[type='file'][accept*='pdf']";
+    static final String ATTACHMENT_SEND_BUTTON = "button:has-text('发送附件'), button:has-text('发送文件'), div[role='dialog'] button:has-text('发送'), div[class*='modal'] button:has-text('发送')";
     static final String RESUME_SENT_MARKER = "text=简历已发送, text=已发送简历, text=在线简历, [class*='resume-card']";
 
     private LiepinLocators() {
