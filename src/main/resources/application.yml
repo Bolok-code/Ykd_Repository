@@ -10,6 +10,8 @@ spring:
     openai:
       api-key: changeme
       base-url: https://apihub.agnes-ai.com/v1
+      connect-timeout: 30s
+      read-timeout: 120s
       chat:
         options:
           model: agnes-2.0-flash

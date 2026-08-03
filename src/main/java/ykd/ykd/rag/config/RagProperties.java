@@ -40,4 +40,20 @@ public class RagProperties {
      * 第一版先设为 0，等接入真实 Embedding 模型后再调整。
      */
     private double similarityThreshold = 0.0;
+
+    /**
+     * Embedding 批量请求时每次最多发送多少条文本。
+     * DashScope text-embedding-v3 单次最多 25 条。
+     */
+    private int embedBatchSize = 25;
+
+    /**
+     * 是否在启动时自动扫描目录并入库文档。
+     */
+    private boolean autoIngestEnabled = false;
+
+    /**
+     * 自动入库扫描的目录路径（相对于工作目录）。
+     */
+    private String autoIngestDir = "./work/rag/auto-ingest";
 }
