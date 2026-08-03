@@ -9,6 +9,7 @@ import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.job.tools.LiepinJobTools;
 import ykd.ykd.processor.UserContext;
 import ykd.ykd.skill.loader.SkillLoader;
+import ykd.ykd.skill.session.SkillSessionManager;
 import ykd.ykd.skill.model.SkillDefinition;
 
 import java.util.Arrays;
@@ -30,7 +31,8 @@ class SkillToolResolverTest {
                 mock(UserContext.class),
                 mock(LiepinResumeService.class),
                 mock(LiepinCampaignService.class),
-                mock(LiepinJobTaskManager.class)
+                mock(LiepinJobTaskManager.class),
+                mock(SkillSessionManager.class)
         );
 
         skillToolResolver =

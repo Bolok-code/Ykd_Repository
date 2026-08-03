@@ -1,5 +1,4 @@
 package ykd.ykd.job.service;
-
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import ykd.ykd.job.config.LiepinProperties;

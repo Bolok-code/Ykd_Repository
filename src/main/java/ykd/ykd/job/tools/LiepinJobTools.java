@@ -8,6 +8,7 @@ import ykd.ykd.job.service.LiepinResumeService;
 import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.llm.tools.DocumentTools;
 import ykd.ykd.processor.UserContext;
+import ykd.ykd.skill.session.SkillSessionManager;
 
 /**
  * 猎聘求职工具的 Spring AI {@code @Tool} 集合。
@@ -44,15 +45,18 @@ public class LiepinJobTools {
     private final LiepinResumeService resumeService;
     private final LiepinCampaignService campaignService;
     private final LiepinJobTaskManager taskManager;
+    private final SkillSessionManager skillSessionManager;
 
     public LiepinJobTools(UserContext userContext,
                           LiepinResumeService resumeService,
                           LiepinCampaignService campaignService,
-                          LiepinJobTaskManager taskManager) {
+                          LiepinJobTaskManager taskManager,
+                          SkillSessionManager skillSessionManager) {
         this.userContext = userContext;
         this.resumeService = resumeService;
         this.campaignService = campaignService;
         this.taskManager = taskManager;
+        this.skillSessionManager = skillSessionManager;
     }
 
     // ── 登录 ──────────────────────────────────────────────────
@@ -113,9 +117,15 @@ public class LiepinJobTools {
         return taskManager.latestStatus(requireUserId());
     }
 
-    @Tool(description = "取消当前用户最近一次猎聘求职任务。")
+    @Tool(description = "取消当前用户最近一次猎聘求职任务。取消成功后技能模式自动退出，后续可直接进行普通对话。")
     public String cancelLiepinJobTask() {
-        return taskManager.cancelLatest(requireUserId());
+        String userId = requireUserId();
+        String result = taskManager.cancelLatest(userId);
+        if (result.startsWith("已取消")) {
+            skillSessionManager.remove(userId);
+            return result + " 已自动退出猎聘技能模式，如需再次搜索岗位或创建投递计划，随时告诉我。";
+        }
+        return result;
     }
 
     // ── 自动投递 ──────────────────────────────────────────────
@@ -149,9 +159,15 @@ public class LiepinJobTools {
         return campaignService.pauseLatest(requireUserId());
     }
 
-    @Tool(description = "永久停止当前用户最近的猎聘全自动投递计划。")
+    @Tool(description = "永久停止当前用户最近的猎聘全自动投递计划。停止成功后技能模式自动退出，后续可直接进行普通对话。")
     public String stopLiepinAutoApplyCampaign() {
-        return campaignService.stopLatest(requireUserId());
+        String userId = requireUserId();
+        String result = campaignService.stopLatest(userId);
+        if (result.startsWith("已停止")) {
+            skillSessionManager.remove(userId);
+            return result + " 已自动退出猎聘技能模式，如需再次搜索岗位或创建投递计划，随时告诉我。";
+        }
+        return result;
     }
 
     @Tool(description = "查看当前用户最近的猎聘全自动投递计划状态、今日成功数和限额。")
@@ -162,6 +178,15 @@ public class LiepinJobTools {
     @Tool(description = "查看当前用户最近的猎聘自动投递记录。")
     public String listLiepinAutoApplications() {
         return campaignService.latestApplications(requireUserId());
+    }
+
+    // ── 技能模式 ──────────────────────────────────────────────
+
+    @Tool(description = "退出猎聘技能模式，清除当前用户的技能会话，后续消息将使用普通对话工具。用户明确表示退出、关闭、结束求职技能时调用。")
+    public String exitLiepinSkill() {
+        String userId = requireUserId();
+        skillSessionManager.remove(userId);
+        return "已退出猎聘技能模式，后续可以直接进行普通对话。如需再次搜索岗位或创建投递计划，随时告诉我。";
     }
 
     // ── 内部辅助 ──────────────────────────────────────────────
