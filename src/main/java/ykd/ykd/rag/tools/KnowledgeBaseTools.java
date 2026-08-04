@@ -20,7 +20,10 @@ import java.util.List;
 @Slf4j
 @Component
 public class KnowledgeBaseTools {
-    
+
+    /** 用户上下文（ThreadLocal）缺失时的兜底提示，避免跨线程调用时空指针/越权 */
+    private static final String NO_USER_CONTEXT = "❌ 无法识别当前用户上下文，请重新发送消息后再试。";
+
     private final DocumentIngestionService ingestionService;
     private final KnowledgeBaseService knowledgeBaseService;
     private final RagRetrievalService retrievalService;
@@ -43,7 +46,8 @@ public class KnowledgeBaseTools {
     @Tool(description = "将刚才解析的文档添加到个人知识库。用户说'把这份文档加入知识库'、'保存到我的知识库'、'记住这份资料'时调用此工具")
     public String addDocumentToKnowledgeBase() {
 
-        String userId = userContext.getCurrentUserId();
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 添加文档到知识库: userId={}", userId);
 
         // 1. 检查是否有缓存的文档
@@ -107,8 +111,9 @@ public class KnowledgeBaseTools {
     @Tool(description = "从个人知识库中检索相关内容并回答问题。用户针对已添加的文档提问时调用，如'根据我的简历总结项目经历'、'文档中提到什么技术栈？'")
     public String answerFromKnowledgeBase(
             @ToolParam(description = "用户的问题") String question) {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 知识库问答: userId={}, question={}", userId, question);
         
         // 1. 检查用户是否有知识库文档
@@ -146,8 +151,9 @@ public class KnowledgeBaseTools {
      */
     @Tool(description = "查看个人知识库中的所有文档。用户说'查看我的知识库'、'我添加了哪些文档'、'知识库列表'时调用")
     public String listKnowledgeBase() {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 查看知识库列表: userId={}", userId);
         
         try {
@@ -166,8 +172,9 @@ public class KnowledgeBaseTools {
     @Tool(description = "查看知识库中某个文档的详细信息。用户说'查看文档详情'、'文档 X 的信息'时调用")
     public String getDocumentDetail(
             @ToolParam(description = "文档 ID") Long documentId) {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 查看文档详情: userId={}, documentId={}", userId, documentId);
         
         try {
@@ -186,8 +193,9 @@ public class KnowledgeBaseTools {
     @Tool(description = "从知识库中删除指定文档。用户说'删除文档 X'、'从知识库移除文档 Y'时调用")
     public String deleteDocument(
             @ToolParam(description = "要删除的文档 ID") Long documentId) {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 删除文档: userId={}, documentId={}", userId, documentId);
         
         try {
@@ -218,6 +226,17 @@ public class KnowledgeBaseTools {
             log.error("[KnowledgeBaseTools] 删除文档失败: {}", e.getMessage(), e);
             return "❌ 删除文档失败：" + e.getMessage();
         }
+    }
+
+    /**
+     * 获取当前用户 ID，上下文缺失时记录日志并返回 null（调用方需判空）。
+     */
+    private String currentUserId() {
+        String userId = userContext.getCurrentUserId();
+        if (userId == null || userId.isBlank()) {
+            log.warn("[KnowledgeBaseTools] 无法获取当前用户上下文（可能工具回调跨线程）");
+        }
+        return userId;
     }
 
     /**

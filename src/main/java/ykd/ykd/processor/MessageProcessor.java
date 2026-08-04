@@ -86,9 +86,9 @@ public class MessageProcessor {
     private final LiepinResumeService liepinResumeService;
     private final LiepinJobTaskManager liepinJobTaskManager;
     private final SkillSelector skillSelector;
-    private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
-    private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
-    private final Queue<ProcessResult> completedLiepinTasks = new ConcurrentLinkedQueue<>();
+    private final Queue<ProcessResult> completedVideos = new BoundedResultQueue(10);
+    private final Queue<ProcessResult> completedImageBatches = new BoundedResultQueue(10);
+    private final Queue<ProcessResult> completedLiepinTasks = new BoundedResultQueue(50);
     private final Queue<ProcessResult> voiceQueue;
 
     public MessageProcessor(LlmService llmService,

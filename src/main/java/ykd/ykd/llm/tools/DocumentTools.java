@@ -58,6 +58,7 @@ public class DocumentTools {
     }
 
     public static boolean hasCachedDocument(String userId) {
+        if (userId == null) return false;
         evictExpired();
         return userDocumentCache.containsKey(userId);
     }

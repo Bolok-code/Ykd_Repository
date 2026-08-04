@@ -150,8 +150,11 @@ public class BotSession implements AutoCloseable {
             log.info("[BotSession:{}] 请扫码登录: {}", botUserId, qrCodeContent);
             return qrCodeContent;
         } catch (Exception e) {
+            // 不能返回 null：null 已保留给"session 恢复成功"这一唯一含义。
+            // 获取二维码失败必须抛异常，否则上层会把未登录的会话误当成已在线。
             log.error("[BotSession:{}] 获取 QR 码失败", botUserId, e);
-            return null;
+            closeClient();
+            throw new IllegalStateException("获取二维码失败: " + e.getMessage(), e);
         }
     }
 
