@@ -160,8 +160,38 @@ public class BotSession implements AutoCloseable {
                             break;
                         }
 
+                        String cursorBefore = currentClient.exportResumeContext().getUpdatesCursor();
                         List<WeixinMessage> messages = currentClient.getUpdates();
+                        String cursorAfter = currentClient.exportResumeContext().getUpdatesCursor();
                         saveSession(currentClient.exportResumeContext());
+
+                        int msgCount = (messages != null) ? messages.size() : 0;
+                        boolean cursorChanged = !java.util.Objects.equals(cursorBefore, cursorAfter);
+
+                        if (cursorChanged && msgCount == 0) {
+                            log.warn("[BotSession:{}] Cursor已更新但返回0条消息，尝试用旧cursor重试...", botUserId);
+                            try {
+                                java.lang.reflect.Field csField = currentClient.getClass().getDeclaredField("cursorStore");
+                                csField.setAccessible(true);
+                                Object cursorStore = csField.get(currentClient);
+                                java.lang.reflect.Method putMethod = cursorStore.getClass().getMethod("put", String.class);
+                                putMethod.invoke(cursorStore, cursorBefore);
+
+                                sleep(1000);
+                                List<WeixinMessage> retryMessages = currentClient.getUpdates();
+                                int retryCount = (retryMessages != null) ? retryMessages.size() : 0;
+                                log.info("[BotSession:{}] 重试结果: 消息数={}", botUserId, retryCount);
+
+                                if (retryMessages != null && !retryMessages.isEmpty()) {
+                                    for (WeixinMessage message : retryMessages) {
+                                        handleMessage(message);
+                                        reminderManager.resumeAllForUser(message.getFrom_user_id());
+                                    }
+                                }
+                            } catch (Exception ex) {
+                                log.error("[BotSession:{}] 重试失败: {}", botUserId, ex.getMessage());
+                            }
+                        }
 
                         if (messages != null) {
                             for (WeixinMessage message : messages) {
