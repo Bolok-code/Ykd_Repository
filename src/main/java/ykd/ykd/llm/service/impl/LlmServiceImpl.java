@@ -58,6 +58,7 @@ public class LlmServiceImpl implements LlmService {
     private long skillTtlMs;
 
     private final ReminderInterceptor reminderInterceptor;
+    private final HistoryClearInterceptor historyClearInterceptor;
     private final SkillSelector skillSelector;
     private final SkillToolResolver skillToolResolver;
     private final SkillRegistry skillRegistry;
@@ -78,6 +79,7 @@ public class LlmServiceImpl implements LlmService {
     private final DocumentTools documentTools;
 
     public LlmServiceImpl(ReminderInterceptor reminderInterceptor,
+                           HistoryClearInterceptor historyClearInterceptor,
                           SkillSelector skillSelector,
                           SkillToolResolver skillToolResolver,
                           SkillRegistry skillRegistry,
@@ -96,6 +98,7 @@ public class LlmServiceImpl implements LlmService {
                           EmailTools emailTools,
                           DocumentTools documentTools) {
         this.reminderInterceptor = reminderInterceptor;
+        this.historyClearInterceptor = historyClearInterceptor;
         this.skillSelector = skillSelector;
         this.skillToolResolver = skillToolResolver;
         this.skillRegistry = skillRegistry;
@@ -147,6 +150,8 @@ public class LlmServiceImpl implements LlmService {
         // 提醒请求直接拦截，正则提取时间+消息，不走 LLM
         String intercepted = reminderInterceptor.tryIntercept(text, userId);
         if (intercepted != null) return intercepted;
+        String clearResult = historyClearInterceptor.tryIntercept(text, userId);
+        if (clearResult != null) return clearResult;
 
         // 手动退出 Skill 指令，必须在 pickSkill 之前拦截（"退出猎聘"会命中猎聘关键词）
         String exitResult = tryExitSkill(text, userId);
