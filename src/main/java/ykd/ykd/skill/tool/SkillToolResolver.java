@@ -5,6 +5,7 @@ import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 import ykd.ykd.job.tools.LiepinJobTools;
+import ykd.ykd.rag.tools.KnowledgeBaseTools;
 import ykd.ykd.skill.model.SkillDefinition;
 
 import java.util.Arrays;
@@ -26,32 +27,31 @@ public class SkillToolResolver {
     private final Map<String, ToolCallback> toolCallbacks;
 
     public SkillToolResolver(
-            LiepinJobTools liepinJobTools) {
+            LiepinJobTools liepinJobTools,
+            KnowledgeBaseTools knowledgeBaseTools) {
 
         Map<String, ToolCallback> discoveredTools =
                 new LinkedHashMap<>();
 
-        /*
-         * 扫描LiepinJobTools中所有带有@Tool的方法，
-         * 并转换为ToolCallback。
-         */
+        // 扫描猎聘工具
         ToolCallback[] liepinCallbacks =
                 ToolCallbacks.from(liepinJobTools);
-
         for (ToolCallback callback : liepinCallbacks) {
-            String toolName =
-                    callback.getToolDefinition().name();
-
-            ToolCallback existing =
-                    discoveredTools.putIfAbsent(
-                            toolName,
-                            callback
-                    );
-
+            String toolName = callback.getToolDefinition().name();
+            ToolCallback existing = discoveredTools.putIfAbsent(toolName, callback);
             if (existing != null) {
-                throw new IllegalStateException(
-                        "发现重复的Tool名称：" + toolName
-                );
+                throw new IllegalStateException("发现重复的Tool名称：" + toolName);
+            }
+        }
+
+        // 扫描知识库工具
+        ToolCallback[] kbCallbacks =
+                ToolCallbacks.from(knowledgeBaseTools);
+        for (ToolCallback callback : kbCallbacks) {
+            String toolName = callback.getToolDefinition().name();
+            ToolCallback existing = discoveredTools.putIfAbsent(toolName, callback);
+            if (existing != null) {
+                throw new IllegalStateException("发现重复的Tool名称：" + toolName);
             }
         }
 

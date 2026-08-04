@@ -8,6 +8,7 @@ import ykd.ykd.job.service.LiepinResumeService;
 import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.job.tools.LiepinJobTools;
 import ykd.ykd.processor.UserContext;
+import ykd.ykd.rag.tools.KnowledgeBaseTools;
 import ykd.ykd.skill.loader.SkillLoader;
 import ykd.ykd.skill.session.SkillSessionManager;
 import ykd.ykd.skill.model.SkillDefinition;
@@ -36,7 +37,7 @@ class SkillToolResolverTest {
         );
 
         skillToolResolver =
-                new SkillToolResolver(liepinJobTools);
+                new SkillToolResolver(liepinJobTools, mock(KnowledgeBaseTools.class));
 
         liepinSkill = new SkillLoader()
                 .loadFromClasspath(

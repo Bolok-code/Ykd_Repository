@@ -10,6 +10,8 @@ spring:
     openai:
       api-key: changeme
       base-url: https://apihub.agnes-ai.com/v1
+      connect-timeout: 30s
+      read-timeout: 120s
       chat:
         options:
           model: agnes-2.0-flash
@@ -61,7 +63,7 @@ liepin:
   max-search-results: 10
   max-search-pages: 3
   default-salary-code: ""
-  default-greeting: 请先在猎聘 App 中设置默认招呼语；程序确认岗位后只点击“聊一聊”，不会额外重复发送文本。
+  default-greeting: 请先在猎聘 App 中设置默认招呼语；程序确认岗位后点击“聊一聊”，猎聘会自动发送招呼语完成投递。
   auto-apply:
     enabled: ${LIEPIN_AUTO_APPLY_ENABLED:false}
     scan-interval-ms: ${LIEPIN_AUTO_SCAN_INTERVAL_MS:60000}
@@ -75,8 +77,9 @@ mybatis:
     map-underscore-to-camel-case: true
 rag:
   enabled: true
-  chunk-size: 600
-  chunk-overlap: 100
+  chunk-size: 300
+  min-chunk-size-chars: 50
+  max-num-chunks: 100
   top-k: 5
   max-context-chars: 6000
-  similarity-threshold: 0.0
+  similarity-threshold: 0.3

@@ -114,14 +114,21 @@ public class RagRetrievalService {
                 .limit(ragProperties.getTopK())
                 .toList();
         
-        log.info("[RagRetrieval] 检索完成: totalChunks={}, matchedChunks={}, topK={}", 
+        log.info("[RagRetrieval] 检索完成: totalChunks={}, matchedChunks={}, topK={}",
                 allChunks.size(), results.size(), topResults.size());
-        
+
+        // 打印 Top-5 分数分布，便于观察阈值是否合理
         if (!topResults.isEmpty()) {
-            log.debug("[RagRetrieval] Top-1 相似度: {}, 文件: {}", 
-                    topResults.get(0).getScore(), topResults.get(0).getFileName());
+            StringBuilder scoreLog = new StringBuilder("[RagRetrieval] Top-5 分数: ");
+            int limit = Math.min(5, topResults.size());
+            for (int i = 0; i < limit; i++) {
+                RagSearchResult r = topResults.get(i);
+                scoreLog.append(String.format("[%d] %.3f (%s)", i + 1, r.getScore(), r.getFileName()));
+                if (i < limit - 1) scoreLog.append(", ");
+            }
+            log.info(scoreLog.toString());
         }
-        
+
         return topResults;
     }
     
@@ -129,16 +136,12 @@ public class RagRetrievalService {
      * 获取文档 ID 到文件名的映射
      */
     private Map<Long, String> getDocumentNames(List<KnowledgeChunk> chunks) {
-        // 提取所有唯一的文档 ID
         List<Long> documentIds = chunks.stream()
                 .map(KnowledgeChunk::getDocumentId)
                 .distinct()
                 .toList();
-        
-        // 批量查询文档信息
-        return documentIds.stream()
-                .map(documentMapper::findById)
-                .filter(doc -> doc != null)
+
+        return documentMapper.findByIds(documentIds).stream()
                 .collect(Collectors.toMap(
                         KnowledgeDocument::getId,
                         KnowledgeDocument::getFileName

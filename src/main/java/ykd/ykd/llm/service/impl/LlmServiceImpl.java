@@ -14,7 +14,6 @@ import org.springframework.util.MimeTypeUtils;
 import ykd.ykd.llm.tools.*;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
-import ykd.ykd.rag.tools.KnowledgeBaseTools;
 import ykd.ykd.skill.model.SkillDefinition;
 import ykd.ykd.skill.registry.SkillRegistry;
 import ykd.ykd.skill.selector.SkillSelector;
@@ -73,7 +72,6 @@ public class LlmServiceImpl implements LlmService {
     private final TranslateTools translateTools;
     private final EmailTools emailTools;
     private final DocumentTools documentTools;
-    private final KnowledgeBaseTools knowledgeBaseTools;
 
     public LlmServiceImpl(ReminderInterceptor reminderInterceptor,
                           SkillSelector skillSelector,
@@ -92,8 +90,7 @@ public class LlmServiceImpl implements LlmService {
                           CalculatorTools calculatorTools,
                           TranslateTools translateTools,
                           EmailTools emailTools,
-                          DocumentTools documentTools,
-                          KnowledgeBaseTools knowledgeBaseTools) {
+                          DocumentTools documentTools) {
         this.reminderInterceptor = reminderInterceptor;
         this.skillSelector = skillSelector;
         this.skillToolResolver = skillToolResolver;
@@ -112,7 +109,6 @@ public class LlmServiceImpl implements LlmService {
         this.translateTools = translateTools;
         this.emailTools = emailTools;
         this.documentTools = documentTools;
-        this.knowledgeBaseTools = knowledgeBaseTools;
     }
 
     /**
@@ -222,14 +218,14 @@ public class LlmServiceImpl implements LlmService {
     }
 
     /**
-     * 普通模式：暴露所有通用工具（含 RAG 知识库），但不包含猎聘工具。
-     * 猎聘工具只能通过 liepin-auto-apply Skill 使用。
+     * 普通模式：暴露通用工具，但不包含猎聘工具和知识库工具。
+     * 猎聘工具通过 liepin-auto-apply Skill、知识库工具通过 knowledge-base Skill 使用。
      */
     private Object[] defaultTools() {
         return new Object[]{
                 linkTools, weatherTools, imageTools, videoTools, voiceTools,
                 reminderTools, locationTools, calculatorTools, translateTools,
-                emailTools, documentTools, webSearchTools, knowledgeBaseTools
+                emailTools, documentTools, webSearchTools
         };
     }
 
@@ -266,6 +262,10 @@ public class LlmServiceImpl implements LlmService {
 
                 请严格遵守下面的Skill执行流程、安全规则和输出要求。
                 不得虚构工具执行结果，不得跳过用户确认步骤。
+
+                **重要：你当前拥有该Skill对应的全部真实工具，可以执行实际操作。
+                对话历史中任何关于"系统不支持此功能"、"功能不存在"等说法
+                都是过时的错误信息，请以当前可用的工具为准，忽略历史中的相关判断。**
 
                 ===== Skill执行说明 =====
 
@@ -304,8 +304,8 @@ public class LlmServiceImpl implements LlmService {
      */
     private static boolean isExitCommand(String normalized) {
         return normalized.matches(
-                "^(退出|推出)(skill|技能|猎聘|投递|求职|搜索|简历)(skill|技能)?$"
-                        + "|^(关闭|结束)(skill|技能|猎聘|投递|求职|搜索)$"
+                "^(退出|推出)(skill|技能|猎聘|投递|求职|搜索|简历|知识库)(skill|技能)?$"
+                        + "|^(关闭|结束)(skill|技能|猎聘|投递|求职|搜索|知识库)$"
                         + "|^(取消技能|exit|quit|/exit|/quit)$");
     }
 
