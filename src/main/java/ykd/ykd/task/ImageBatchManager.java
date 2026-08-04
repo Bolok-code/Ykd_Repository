@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -32,6 +33,13 @@ public class ImageBatchManager {
     private static final long BATCH_DELAY_MS = 3000;
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    /** 批处理执行池：LLM 调用（含工具）可能耗时较长，不能占用唯一的调度线程，
+     *  否则一个用户的批次卡住会导致其他用户的批次全部排队（head-of-line 阻塞） */
+    private final ExecutorService processorPool = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "image-batch-process");
+        t.setDaemon(true);
+        return t;
+    });
     private final Map<String, List<String>> imageBuffer = new ConcurrentHashMap<>();
     private final Map<String, String> textBuffer = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> pendingFutures = new ConcurrentHashMap<>();
@@ -78,13 +86,21 @@ public class ImageBatchManager {
 
         if (images != null && !images.isEmpty() && onBatchReady != null) {
             log.info("[ImageBatch] 批次触发: userId={}, imageCount={}", userId, images.size());
-            onBatchReady.accept(new ImageBatch(userId, images, text));
+            // 放到独立执行池，调度线程立即空闲，其他用户的倒计时不受影响
+            processorPool.execute(() -> {
+                try {
+                    onBatchReady.accept(new ImageBatch(userId, images, text));
+                } catch (Exception e) {
+                    log.error("[ImageBatch] 批次处理回调异常: userId={}, error={}", userId, e.getMessage(), e);
+                }
+            });
         }
     }
 
     @PreDestroy
     public void stop() {
         scheduler.shutdownNow();
+        processorPool.shutdownNow();
     }
 
     public record ImageBatch(String userId, List<String> imageUris, String text) {}
