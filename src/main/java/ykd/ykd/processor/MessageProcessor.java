@@ -5,6 +5,7 @@ import com.github.wechat.ilink.sdk.core.model.CDNMedia;
 import com.github.wechat.ilink.sdk.core.model.MessageItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import ykd.ykd.document.DocumentParsingService;
 import ykd.ykd.job.service.LiepinResumeService;
@@ -31,6 +32,11 @@ import java.util.Base64;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -59,6 +65,17 @@ public class MessageProcessor {
      */
     private static final Pattern URL_PATTERN = Pattern.compile("https?://[^\\s]+");
 
+    /**
+     * 图片批次识别超时时间（毫秒）。超过则放弃本次处理并提示用户重试，
+     * 避免 LLM 调用卡住时用户永远等不到回复。
+     */
+    private static final long IMAGE_PROCESS_TIMEOUT_MS = 150_000L;
+    private final ExecutorService imageTimeoutExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "image-process-timeout");
+        t.setDaemon(true);
+        return t;
+    });
+
     private final LlmService llmService;
     private final ChatClient deepseekClient;
     private final ChatClient agnesClient;
@@ -69,9 +86,9 @@ public class MessageProcessor {
     private final LiepinResumeService liepinResumeService;
     private final LiepinJobTaskManager liepinJobTaskManager;
     private final SkillSelector skillSelector;
-    private final Queue<ProcessResult> completedVideos = new ConcurrentLinkedQueue<>();
-    private final Queue<ProcessResult> completedImageBatches = new ConcurrentLinkedQueue<>();
-    private final Queue<ProcessResult> completedLiepinTasks = new ConcurrentLinkedQueue<>();
+    private final Queue<ProcessResult> completedVideos = new BoundedResultQueue(10);
+    private final Queue<ProcessResult> completedImageBatches = new BoundedResultQueue(10);
+    private final Queue<ProcessResult> completedLiepinTasks = new BoundedResultQueue(50);
     private final Queue<ProcessResult> voiceQueue;
 
     public MessageProcessor(LlmService llmService,
@@ -162,6 +179,11 @@ public class MessageProcessor {
                     }
 
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
+                    // downloadParseAndCache 返回"内容为空"提示但不缓存时，直接回显提示，避免空指针
+                    if (cachedContent == null) {
+                        result[0] = fileName;
+                        return;
+                    }
                     boolean resumeSaved = liepinResumeService.looksLikeResume(fileName, cachedContent);
                     if (resumeSaved) {
                         byte[] originalBytes = DocumentTools.getCachedBytes(fromUserId);
@@ -221,10 +243,11 @@ public class MessageProcessor {
 
 
             if (text != null && !text.isBlank()) {
-                // 命中 Skill 命令时，清除文件缓存并走正常路由（Skill 提示词不应被文件上下文污染）
+                // 命中 Skill 命令时走正常路由（不注入文件上下文，Skill 提示词不被污染）。
+                // 注意：绝不能清除文件缓存——knowledge-base 的 addDocumentToKnowledgeBase、
+                // liepin 的 saveCurrentDocumentAsLiepinResume 都要从缓存读取刚收到的文件。
                 if (isSkillCommand(text)) {
-                    DocumentTools.clearCachedDocument(fromUserId);
-                    log.info("[Processor] 检测到 Skill 命令，退出文件追问模式: userId={}, text={}",
+                    log.info("[Processor] 检测到 Skill 命令，走正常路由: userId={}, text={}",
                             fromUserId, text);
                 } else {
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
@@ -434,17 +457,40 @@ public class MessageProcessor {
 
         log.info("[Processor] 图片批次处理: userId={}, imageCount={}, text={}", userId, imageUris.size(), text);
 
-        userContext.executeAs(userId, () -> {
-            try {
-                String reply = llmService.chat(text, imageUris, agnesClient, userId);
-                log.info("[Processor] 图片批次回复: userId={}, reply={}", userId,
-                        reply != null ? reply.substring(0, Math.min(100, reply.length())) : null);
-                completedImageBatches.add(ProcessResult.text(reply, userId));
-            } catch (Exception e) {
-                log.error("[Processor] 图片批次处理失败: userId={}, error={}", userId, e.getMessage(), e);
-                completedImageBatches.add(ProcessResult.text("图片识别失败，请稍后重试", userId));
-            }
+        String reply;
+        try {
+            reply = timedChat(text, imageUris, userId);
+        } catch (TimeoutException e) {
+            log.warn("[Processor] 图片批次处理超时: userId={}", userId);
+            completedImageBatches.add(ProcessResult.text("图片识别超时，请稍后重试", userId));
+            return;
+        } catch (Exception e) {
+            log.error("[Processor] 图片批次处理失败: userId={}, error={}", userId, e.getMessage(), e);
+            completedImageBatches.add(ProcessResult.text("图片识别失败，请稍后重试", userId));
+            return;
+        }
+        log.info("[Processor] 图片批次回复: userId={}, reply={}", userId,
+                reply != null ? reply.substring(0, Math.min(100, reply.length())) : null);
+        completedImageBatches.add(ProcessResult.text(reply, userId));
+    }
+
+    /**
+     * 在独立线程中调用 LLM 并设置超时，防止识别请求卡住时用户永远等不到回复。
+     * 超时后底层线程仍可能继续执行，但结果会被丢弃（受 read-timeout 上限约束，不会永久泄漏）。
+     */
+    private String timedChat(String text, List<String> imageUris, String userId) throws Exception {
+        Future<String> future = imageTimeoutExecutor.submit(() -> {
+            String[] holder = new String[1];
+            userContext.executeAs(userId,
+                    () -> holder[0] = llmService.chat(text, imageUris, agnesClient, userId));
+            return holder[0];
         });
+        return future.get(IMAGE_PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        imageTimeoutExecutor.shutdownNow();
     }
     private boolean hasFileItem(WeixinMessage msg) {
         for (MessageItem item : msg.getItem_list()) {

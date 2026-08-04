@@ -1,16 +1,19 @@
 package ykd.ykd.llm.service.impl;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.content.Media;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
+import ykd.ykd.exception.BusinessException;
+import ykd.ykd.exception.ErrorCode;
 import ykd.ykd.llm.tools.*;
 import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.llm.service.LlmService;
@@ -50,8 +53,9 @@ import java.util.Optional;
 @Service
 public class LlmServiceImpl implements LlmService {
 
-    /** Skill 会话保持 10 分钟，多轮对话中不会因单条消息无关键词而丢失 */
-    private static final long SKILL_TTL_MS = 10 * 60 * 1000;
+    /** Skill 会话保持时长（毫秒），可在 application.yml 通过 llm.skill-ttl-ms 覆盖 */
+    @Value("${llm.skill-ttl-ms:600000}")
+    private long skillTtlMs;
 
     private final ReminderInterceptor reminderInterceptor;
     private final HistoryClearInterceptor historyClearInterceptor;
@@ -194,9 +198,19 @@ public class LlmServiceImpl implements LlmService {
 
             // 6. 调用 LLM
             ChatResponse chatResponse = requestSpec.call().chatResponse();
+            if (chatResponse == null || chatResponse.getResult() == null
+                    || chatResponse.getResult().getOutput() == null
+                    || chatResponse.getResult().getOutput().getText() == null) {
+                throw new BusinessException(ErrorCode.AI_CALL_FAILED, "模型未返回有效回复");
+            }
             String content = chatResponse.getResult().getOutput().getText();
-            // 7. 持久化对话记忆
-            memoryManagerService.save(userId, finalText, content, hasImages ? "Agnes" : "DeepSeek");
+            // 7. 持久化对话记忆。持久化失败不应让回复丢失：记录日志并继续返回给用户，
+            //    避免"LLM 已回复但用户收到错误、对话状态不一致"的孤儿问题
+            try {
+                memoryManagerService.save(userId, finalText, content, hasImages ? "Agnes" : "DeepSeek");
+            } catch (Exception e) {
+                log.error("[LLM] 对话记忆保存失败: userId={}, error={}", userId, e.getMessage(), e);
+            }
             compressIfNeeded(userId, chatResponse);
 
             log.info("[LLM] 请求完成: elapsed={}ms, userId={}, reply={}",
@@ -329,7 +343,7 @@ public class LlmServiceImpl implements LlmService {
         SkillSession session = skillSessionManager.get(userId);
         if (session != null) {
             long elapsed = System.currentTimeMillis() - session.lastActiveAt();
-            if (elapsed < SKILL_TTL_MS) {
+            if (elapsed < skillTtlMs) {
                 return skillRegistry.findEnabledByName(session.skillName());
             }
             log.debug("[LLM] Skill 会话过期: userId={}, skill={}, elapsed={}ms",
@@ -340,9 +354,12 @@ public class LlmServiceImpl implements LlmService {
     }
 
     private void compressIfNeeded(String userId, ChatResponse response) {
-        Usage usage = response.getMetadata().getUsage();
+        // getMetadata() 在部分 Provider 可能返回 null，需判空避免 NPE
+        ChatResponseMetadata metadata = response.getMetadata();
+        if (metadata == null) return;
+        Usage usage = metadata.getUsage();
         if (usage != null) {
-            memoryManagerService.compressIfNeeded(userId, (int) usage.getPromptTokens());
+            memoryManagerService.compressIfNeeded(userId, usage.getPromptTokens());
         }
     }
 

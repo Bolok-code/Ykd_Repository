@@ -93,8 +93,10 @@ public class MemoryManagerService {
 
     /**
      * 压缩当前运行时上下文，并同步到 SQLite。
+     *
+     * @param promptTokens 本次请求的 token 数，用 {@code long} 避免超 2.1B 时 int 溢出
      */
-    public void compressIfNeeded(String userId, int promptTokens) {
+    public void compressIfNeeded(String userId, long promptTokens) {
         validateUserId(userId);
         hydrateFromDatabaseIfNeeded(userId);
 
@@ -103,7 +105,7 @@ public class MemoryManagerService {
             return;
         }
 
-        int actualTokens = promptTokens > 0 ? promptTokens : estimateTokens(history);
+        int actualTokens = promptTokens > 0 ? (int) Math.min(Integer.MAX_VALUE, promptTokens) : estimateTokens(history);
         if (actualTokens < COMPRESS_THRESHOLD_TOKENS) {
             return;
         }

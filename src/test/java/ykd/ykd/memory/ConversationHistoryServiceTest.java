@@ -1,18 +1,26 @@
 package ykd.ykd.memory;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.boot.test.autoconfigure.MybatisTest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import ykd.ykd.memory.model.ConversationMessage;
 import ykd.ykd.memory.service.ConversationHistoryService;
 import ykd.ykd.memory.service.impl.ConversationHistoryServiceImpl;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,7 +28,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(ConversationHistoryServiceImpl.class)
 @TestPropertySource(properties = {
-        "spring.datasource.url=jdbc:sqlite:./work/sqlite/conversation-test.db",
         "spring.datasource.driver-class-name=org.sqlite.JDBC",
         "spring.datasource.hikari.maximum-pool-size=1"
 })
@@ -30,6 +37,14 @@ class ConversationHistoryServiceTest {
     private static final String USER_ONE = "test-user-one";
     private static final String USER_TWO = "test-user-two";
 
+    /** 每次 JVM 运行使用唯一 DB 文件，避免并发跑测试时共用 conversation-test.db 冲突 */
+    private static final Path TEST_DB = Paths.get("target", "conversation-test-" + UUID.randomUUID() + ".db");
+
+    @DynamicPropertySource
+    static void dbProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + TEST_DB);
+    }
+
     @Autowired
     private ConversationHistoryService conversationHistoryService;
 
@@ -37,6 +52,14 @@ class ConversationHistoryServiceTest {
     void cleanUp() {
         conversationHistoryService.clearHistory(USER_ONE);
         conversationHistoryService.clearHistory(USER_TWO);
+    }
+
+    @AfterAll
+    static void cleanUpDbFile() {
+        try {
+            Files.deleteIfExists(TEST_DB);
+        } catch (IOException ignored) {
+        }
     }
 
     @Test

@@ -1,14 +1,21 @@
 package ykd.ykd.job;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.boot.test.autoconfigure.MybatisTest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import ykd.ykd.job.mapper.*;
 import ykd.ykd.job.model.*;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,12 +23,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 @MybatisTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @TestPropertySource(properties = {
-        "spring.datasource.url=jdbc:sqlite:./work/sqlite/conversation-test.db",
         "spring.datasource.driver-class-name=org.sqlite.JDBC",
         "spring.datasource.hikari.maximum-pool-size=1"
 })
 @Sql(scripts = "classpath:db/sqlite/schema.sql")
 class LiepinJobPersistenceTest {
+
+    /** 每次 JVM 运行使用唯一 DB 文件，避免并发跑测试时共用 conversation-test.db 冲突 */
+    private static final Path TEST_DB = Paths.get("target", "liepin-test-" + UUID.randomUUID() + ".db");
+
+    @DynamicPropertySource
+    static void dbProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", () -> "jdbc:sqlite:" + TEST_DB);
+    }
+
+    @AfterAll
+    static void cleanUpDbFile() {
+        try {
+            Files.deleteIfExists(TEST_DB);
+        } catch (IOException ignored) {
+        }
+    }
 
     @Autowired private LiepinResumeMapper resumeMapper;
     @Autowired private LiepinResumeAssetMapper resumeAssetMapper;

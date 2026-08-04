@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -15,10 +16,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 微信 iLink 智能机器人服务（多用户版）。
@@ -30,7 +35,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class WeixinBotService {
 
-    private static final Path SESSION_DIR = Paths.get("work", "bot-sessions");
+    /** 工作目录根，可被 YKD_WORK_DIR 环境变量覆盖（与 SQLite 路径保持一致） */
+    @Value("${YKD_WORK_DIR:./work}")
+    private String workDir;
 
     private final ObjectMapper objectMapper;
     private final MessageProcessor messageProcessor;
@@ -42,6 +49,17 @@ public class WeixinBotService {
 
     /** 等待扫码的 session：botUserId → BotSession（扫码成功后移到 sessions） */
     private final Map<String, BotSession> pendingSessions = new ConcurrentHashMap<>();
+
+    /** 待扫码会话超时时间：用户请求登录但不扫码时，会话不能永远挂着 */
+    private static final long PENDING_TIMEOUT_MS = 5 * 60 * 1000L;
+    /** 待扫码会话清扫周期 */
+    private static final long SWEEP_INTERVAL_MS = 30 * 1000L;
+    private final ScheduledExecutorService pendingSweeper =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "wx-pending-sweep");
+                t.setDaemon(true);
+                return t;
+            });
 
     public WeixinBotService(ObjectMapper objectMapper, MessageProcessor messageProcessor,
                             @Lazy UnifiedReminderManager reminderManager,
@@ -56,13 +74,13 @@ public class WeixinBotService {
 
     @PostConstruct
     public void start() {
-        try { Files.createDirectories(SESSION_DIR); } catch (IOException e) {
+        try { Files.createDirectories(sessionDir()); } catch (IOException e) {
             log.error("创建 session 目录失败", e);
         }
         migrateOldSession();
 
         Thread startupThread = new Thread(() -> {
-            try (var dirStream = Files.list(SESSION_DIR)) {
+            try (var dirStream = Files.list(sessionDir())) {
                 List<Path> sessionFiles = dirStream
                         .filter(p -> p.toString().endsWith(".json"))
                         .toList();
@@ -77,10 +95,15 @@ public class WeixinBotService {
         }, "wx-bot-startup");
         startupThread.setDaemon(true);
         startupThread.start();
+
+        // 定期清扫超时未扫码的会话，避免 BotSession 和线程池永远挂着
+        pendingSweeper.scheduleWithFixedDelay(
+                this::sweepPendingSessions, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
     @PreDestroy
     public void stop() {
+        pendingSweeper.shutdownNow();
         log.info("[BotService] 正在关闭所有 BotSession: online={}, pending={}",
                 sessions.size(), pendingSessions.size());
         for (BotSession session : sessions.values()) {
@@ -95,6 +118,27 @@ public class WeixinBotService {
         }
         sessions.clear();
         pendingSessions.clear();
+    }
+
+    /**
+     * 清扫等待扫码超时的会话：关闭客户端并移出 pendingSessions。
+     */
+    private void sweepPendingSessions() {
+        if (pendingSessions.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        for (Iterator<Map.Entry<String, BotSession>> it = pendingSessions.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, BotSession> entry = it.next();
+            BotSession session = entry.getValue();
+            if (now - session.getCreatedAtMs() > PENDING_TIMEOUT_MS) {
+                it.remove();
+                try {
+                    session.close();
+                } catch (Exception e) {
+                    log.warn("[BotService] 关闭超时待扫码会话异常: {}", e.getMessage());
+                }
+                log.info("[BotService] 待扫码会话超时清理: botUserId={}", entry.getKey());
+            }
+        }
     }
 
     // ── 公共 API ──────────────────────────────────────────────
@@ -181,7 +225,16 @@ public class WeixinBotService {
                     () -> onSessionReady(botUserId));
             // 恢复的 session 直接放入 sessions（session 文件已存在，无需扫码）
             sessions.put(botUserId, session);
-            String qr = session.login();
+            String qr;
+            try {
+                qr = session.login();
+            } catch (RuntimeException e) {
+                // session 文件无效且连二维码都拿不到 → 无法恢复，清理并等下次
+                log.warn("[BotService] 用户 {} 会话恢复失败: {}", botUserId, e.getMessage());
+                sessions.remove(botUserId);
+                session.close();
+                return;
+            }
             if (qr == null) {
                 log.info("[BotService] 已恢复用户 {} 的 session", botUserId);
             } else {
@@ -203,7 +256,16 @@ public class WeixinBotService {
                 messageProcessor, reminderManager,
                 () -> onSessionReady(botUserId));
         pendingSessions.put(botUserId, session);
-        String qr = session.login();
+        String qr;
+        try {
+            qr = session.login();
+        } catch (RuntimeException e) {
+            // 获取二维码失败：绝不能把未登录的会话放进 sessions（在线列表）
+            log.warn("[BotService] 用户 {} 获取二维码失败，关闭会话: {}", botUserId, e.getMessage());
+            pendingSessions.remove(botUserId);
+            session.close();
+            throw e;
+        }
         if (qr == null) {
             // session 文件已恢复成功，直接移到 online
             pendingSessions.remove(botUserId);
@@ -213,7 +275,7 @@ public class WeixinBotService {
     }
 
     private void migrateOldSession() {
-        Path oldFile = Paths.get("work", "ilink-session.json");
+        Path oldFile = sessionDir().getParent().resolve("ilink-session.json");
         if (!Files.exists(oldFile)) return;
         try {
             String json = Files.readString(oldFile);
@@ -237,7 +299,11 @@ public class WeixinBotService {
         }
     }
 
-    private static Path sessionDir(String botUserId) {
-        return SESSION_DIR.resolve(botUserId + ".json");
+    private Path sessionDir() {
+        return Paths.get(workDir, "bot-sessions");
+    }
+
+    private Path sessionDir(String botUserId) {
+        return sessionDir().resolve(botUserId + ".json");
     }
 }

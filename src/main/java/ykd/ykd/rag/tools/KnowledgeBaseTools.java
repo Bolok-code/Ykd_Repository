@@ -20,7 +20,10 @@ import java.util.List;
 @Slf4j
 @Component
 public class KnowledgeBaseTools {
-    
+
+    /** 用户上下文（ThreadLocal）缺失时的兜底提示，避免跨线程调用时空指针/越权 */
+    private static final String NO_USER_CONTEXT = "❌ 无法识别当前用户上下文，请重新发送消息后再试。";
+
     private final DocumentIngestionService ingestionService;
     private final KnowledgeBaseService knowledgeBaseService;
     private final RagRetrievalService retrievalService;
@@ -41,43 +44,44 @@ public class KnowledgeBaseTools {
      * 将文档添加到知识库
      */
     @Tool(description = "将刚才解析的文档添加到个人知识库。用户说'把这份文档加入知识库'、'保存到我的知识库'、'记住这份资料'时调用此工具")
-    public String addDocumentToKnowledgeBase(
-            @ToolParam(description = "操作说明，如'好的，正在添加'") String action) {
-        
-        String userId = userContext.getCurrentUserId();
+    public String addDocumentToKnowledgeBase() {
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 添加文档到知识库: userId={}", userId);
-        
+
         // 1. 检查是否有缓存的文档
         if (!DocumentTools.hasCachedDocument(userId)) {
             return "❌ 没有检测到待添加的文档。请先发送文件并让我解析，然后再说'加入知识库'。";
         }
-        
+
         // 2. 获取缓存的文档信息
         String fileName = DocumentTools.getCachedFileName(userId);
         String content = DocumentTools.getCachedContent(userId);
-        
+
         if (content == null || content.isBlank()) {
             return "❌ 文档内容为空，无法添加到知识库。";
         }
-        
+
         try {
             // 3. 估算片段数量
             int estimatedChunks = ingestionService.estimateChunkCount(content);
-            
-            log.info("[KnowledgeBaseTools] 开始入库: fileName={}, contentLength={}, estimatedChunks={}", 
+
+            log.info("[KnowledgeBaseTools] 开始入库: fileName={}, contentLength={}, estimatedChunks={}",
                     fileName, content.length(), estimatedChunks);
-            
-            // 4. 执行入库操作
+
+            // 4. 执行入库操作，文件类型根据扩展名推断
+            String fileType = detectFileType(fileName);
             Long documentId = ingestionService.ingestDocument(
-                    userId, 
-                    fileName, 
-                    "文档", // 可以从 DocumentTools 获取更准确的类型
+                    userId,
+                    fileName,
+                    fileType,
                     content
             );
-            
-            // 5. 清除缓存（可选，根据需求决定）
-            // DocumentTools.clearCachedDocument(userId);
-            
+
+            // 5. 文件已入库（消费完毕），清除缓存，避免残留被后续无关 Skill 误读
+            DocumentTools.clearCachedDocument(userId);
+
             String result = String.format(
                     "✅ 文档已成功添加到知识库！\n\n" +
                     "📄 文件名：%s\n" +
@@ -107,8 +111,9 @@ public class KnowledgeBaseTools {
     @Tool(description = "从个人知识库中检索相关内容并回答问题。用户针对已添加的文档提问时调用，如'根据我的简历总结项目经历'、'文档中提到什么技术栈？'")
     public String answerFromKnowledgeBase(
             @ToolParam(description = "用户的问题") String question) {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 知识库问答: userId={}, question={}", userId, question);
         
         // 1. 检查用户是否有知识库文档
@@ -146,8 +151,9 @@ public class KnowledgeBaseTools {
      */
     @Tool(description = "查看个人知识库中的所有文档。用户说'查看我的知识库'、'我添加了哪些文档'、'知识库列表'时调用")
     public String listKnowledgeBase() {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 查看知识库列表: userId={}", userId);
         
         try {
@@ -166,8 +172,9 @@ public class KnowledgeBaseTools {
     @Tool(description = "查看知识库中某个文档的详细信息。用户说'查看文档详情'、'文档 X 的信息'时调用")
     public String getDocumentDetail(
             @ToolParam(description = "文档 ID") Long documentId) {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 查看文档详情: userId={}, documentId={}", userId, documentId);
         
         try {
@@ -186,8 +193,9 @@ public class KnowledgeBaseTools {
     @Tool(description = "从知识库中删除指定文档。用户说'删除文档 X'、'从知识库移除文档 Y'时调用")
     public String deleteDocument(
             @ToolParam(description = "要删除的文档 ID") Long documentId) {
-        
-        String userId = userContext.getCurrentUserId();
+
+        String userId = currentUserId();
+        if (userId == null) return NO_USER_CONTEXT;
         log.info("[KnowledgeBaseTools] 删除文档: userId={}, documentId={}", userId, documentId);
         
         try {
@@ -218,5 +226,31 @@ public class KnowledgeBaseTools {
             log.error("[KnowledgeBaseTools] 删除文档失败: {}", e.getMessage(), e);
             return "❌ 删除文档失败：" + e.getMessage();
         }
+    }
+
+    /**
+     * 获取当前用户 ID，上下文缺失时记录日志并返回 null（调用方需判空）。
+     */
+    private String currentUserId() {
+        String userId = userContext.getCurrentUserId();
+        if (userId == null || userId.isBlank()) {
+            log.warn("[KnowledgeBaseTools] 无法获取当前用户上下文（可能工具回调跨线程）");
+        }
+        return userId;
+    }
+
+    /**
+     * 根据文件扩展名推断真实文档类型，避免入库时硬编码为"文档"。
+     */
+    private String detectFileType(String fileName) {
+        if (fileName == null) return "文档";
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".pdf")) return "PDF";
+        if (lower.endsWith(".docx") || lower.endsWith(".doc")) return "Word";
+        if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "Excel";
+        if (lower.endsWith(".md")) return "Markdown";
+        if (lower.endsWith(".txt")) return "文本";
+        if (lower.endsWith(".csv")) return "CSV";
+        return "文档";
     }
 }

@@ -106,4 +106,20 @@ class MemoryUserLocationRepositoryTest {
                         .city()
         );
     }
+
+    @Test
+    void shouldEvictLeastRecentlyUsedWhenOverCapacity() {
+        // 容量上限 1000，插入 1001 个用户 → 最早插入且未再访问的 "u-0" 被逐出
+        repository.save(loc("u-0"));
+        for (int i = 1; i <= 1000; i++) {
+            repository.save(loc("u-" + i));
+        }
+
+        assertFalse(repository.findByUserId("u-0").isPresent());
+        assertTrue(repository.findByUserId("u-1000").isPresent());
+    }
+
+    private static UserLocation loc(String userId) {
+        return new UserLocation(userId, "杭州西湖区", "杭州市", 120.1302, 30.2596, LocalDateTime.now());
+    }
 }
