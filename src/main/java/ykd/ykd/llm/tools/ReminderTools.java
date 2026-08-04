@@ -99,17 +99,4 @@ public class ReminderTools {
             return "❌ " + ErrorCode.REMINDER_CANCEL_FAILED.getDefaultMessage();
         }
     }
-
-    @Deprecated
-    @Tool(description = "查看所有间隔重复提醒（已合并到 listReminders，请优先使用 listReminders）")
-    public String listIntervalReminders() {
-        return listReminders();
-    }
-
-    @Deprecated
-    @Tool(description = "取消指定间隔提醒（已合并到 cancelReminder，请优先使用 cancelReminder）")
-    public String cancelIntervalReminder(
-            @ToolParam(description = "提醒序号，如1、2、3") int index) {
-        return cancelReminder(index);
-    }
 }

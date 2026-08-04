@@ -2,7 +2,6 @@ package ykd.ykd.memory;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.context.annotation.Bean;
@@ -14,7 +13,7 @@ public class MemoryConfig {
     @Bean
     ChatMemory chatMemory() {
         return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .chatMemoryRepository(new CaffeineChatMemoryRepository())
                 .maxMessages(Integer.MAX_VALUE)
                 .build();
     }
