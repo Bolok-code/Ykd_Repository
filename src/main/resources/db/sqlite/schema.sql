@@ -245,5 +245,9 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
 CREATE INDEX IF NOT EXISTS idx_knowledge_document_user_id
     ON knowledge_document(user_id);
 
+-- 哈希去重查询（findByUserIdAndFileHash）复合索引，避免全表扫描
+CREATE INDEX IF NOT EXISTS idx_knowledge_document_user_file_hash
+    ON knowledge_document(user_id, file_hash);
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_document_id
     ON knowledge_chunk(document_id);

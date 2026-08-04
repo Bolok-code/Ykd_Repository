@@ -164,6 +164,25 @@ class EmbeddingSkillSelectorTest {
     }
 
     @Test
+    void shouldNotMatchGenericTwoCharWordInFallback() {
+        EmbeddingService failingEmbedding = mock(EmbeddingService.class);
+        when(failingEmbedding.embed(anyString()))
+                .thenThrow(new RuntimeException("API unavailable"));
+
+        SkillLoader skillLoader = new SkillLoader();
+        SkillRegistry skillRegistry = new SkillRegistry(skillLoader);
+        skillRegistry.loadAll();
+
+        EmbeddingSkillSelector fallbackSelector = new EmbeddingSkillSelector(
+                skillRegistry, failingEmbedding);
+        fallbackSelector.buildEmbeddingCache(); // 缓存为空，走关键词降级
+
+        // "使用""功能" 这类 2 字泛词嵌入在长句中，不应误命中任何 Skill
+        assertTrue(fallbackSelector.select("这个功能怎么使用").isEmpty());
+        assertTrue(fallbackSelector.select("请问这个功能怎么使用").isEmpty());
+    }
+
+    @Test
     void shouldReturnEmptyWhenCacheIsEmptyAndNoKeywordMatch() {
         EmbeddingSkillSelector emptySelector = new EmbeddingSkillSelector(
                 mock(SkillRegistry.class), mock(EmbeddingService.class));

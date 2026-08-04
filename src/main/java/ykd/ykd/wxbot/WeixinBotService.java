@@ -15,10 +15,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 微信 iLink 智能机器人服务（多用户版）。
@@ -42,6 +46,17 @@ public class WeixinBotService {
 
     /** 等待扫码的 session：botUserId → BotSession（扫码成功后移到 sessions） */
     private final Map<String, BotSession> pendingSessions = new ConcurrentHashMap<>();
+
+    /** 待扫码会话超时时间：用户请求登录但不扫码时，会话不能永远挂着 */
+    private static final long PENDING_TIMEOUT_MS = 5 * 60 * 1000L;
+    /** 待扫码会话清扫周期 */
+    private static final long SWEEP_INTERVAL_MS = 30 * 1000L;
+    private final ScheduledExecutorService pendingSweeper =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "wx-pending-sweep");
+                t.setDaemon(true);
+                return t;
+            });
 
     public WeixinBotService(ObjectMapper objectMapper, MessageProcessor messageProcessor,
                             @Lazy UnifiedReminderManager reminderManager,
@@ -77,10 +92,15 @@ public class WeixinBotService {
         }, "wx-bot-startup");
         startupThread.setDaemon(true);
         startupThread.start();
+
+        // 定期清扫超时未扫码的会话，避免 BotSession 和线程池永远挂着
+        pendingSweeper.scheduleWithFixedDelay(
+                this::sweepPendingSessions, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
     @PreDestroy
     public void stop() {
+        pendingSweeper.shutdownNow();
         log.info("[BotService] 正在关闭所有 BotSession: online={}, pending={}",
                 sessions.size(), pendingSessions.size());
         for (BotSession session : sessions.values()) {
@@ -95,6 +115,27 @@ public class WeixinBotService {
         }
         sessions.clear();
         pendingSessions.clear();
+    }
+
+    /**
+     * 清扫等待扫码超时的会话：关闭客户端并移出 pendingSessions。
+     */
+    private void sweepPendingSessions() {
+        if (pendingSessions.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        for (Iterator<Map.Entry<String, BotSession>> it = pendingSessions.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, BotSession> entry = it.next();
+            BotSession session = entry.getValue();
+            if (now - session.getCreatedAtMs() > PENDING_TIMEOUT_MS) {
+                it.remove();
+                try {
+                    session.close();
+                } catch (Exception e) {
+                    log.warn("[BotService] 关闭超时待扫码会话异常: {}", e.getMessage());
+                }
+                log.info("[BotService] 待扫码会话超时清理: botUserId={}", entry.getKey());
+            }
+        }
     }
 
     // ── 公共 API ──────────────────────────────────────────────

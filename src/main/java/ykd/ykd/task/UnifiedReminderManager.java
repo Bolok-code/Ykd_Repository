@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,6 +34,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -52,6 +54,11 @@ public class UnifiedReminderManager {
     private final ThreadPoolTaskScheduler taskScheduler = new ThreadPoolTaskScheduler();
     private final Map<String, ReminderTask> tasks = new ConcurrentHashMap<>();
     private final Set<String> pausedTaskIds = ConcurrentHashMap.newKeySet();
+
+    /** 提醒排序：先按创建时间，时间相同按插入序号，保证同毫秒内调度也能保持插入顺序 */
+    private static final Comparator<ReminderTask> TaskOrder =
+            Comparator.comparing((ReminderTask t) -> t.createdAt)
+                    .thenComparingLong(t -> t.sequence);
 
     public UnifiedReminderManager(@Lazy LlmService llmService,
                                    @Qualifier("deepseekClient") ChatClient deepseekClient,
@@ -261,7 +268,7 @@ public class UnifiedReminderManager {
     public String listTasks(String userId) {
         List<ReminderTask> userTasks = tasks.values().stream()
                 .filter(t -> t.userId.equals(userId))
-                .sorted((a, b) -> a.createdAt.compareTo(b.createdAt))
+                .sorted(TaskOrder)
                 .toList();
 
         if (userTasks.isEmpty()) return "当前没有待执行的提醒";
@@ -289,7 +296,7 @@ public class UnifiedReminderManager {
     public String cancelByIndex(String userId, int index) {
         List<ReminderTask> userTasks = tasks.values().stream()
                 .filter(t -> t.userId.equals(userId))
-                .sorted((a, b) -> a.createdAt.compareTo(b.createdAt))
+                .sorted(TaskOrder)
                 .toList();
 
         if (index < 1 || index > userTasks.size()) {
@@ -503,6 +510,9 @@ public class UnifiedReminderManager {
     // ── Task ──────────────────────────────────────────────────
 
     static class ReminderTask {
+        /** 单调递增序号，用于同一时间戳（createdAt 同毫秒/微秒）下保持插入顺序 */
+        private static final AtomicLong SEQUENCE = new AtomicLong();
+
         final String taskId;
         final String userId;
         final String message;
@@ -511,6 +521,7 @@ public class UnifiedReminderManager {
         final long intervalSeconds;
         final boolean needsProcessing;
         final Instant createdAt;
+        final long sequence;
         volatile ScheduledFuture<?> future;
 
         ReminderTask(String taskId, String userId, String message,
@@ -523,6 +534,7 @@ public class UnifiedReminderManager {
             this.intervalSeconds = intervalSeconds;
             this.needsProcessing = needsProcessing;
             this.createdAt = Instant.now();
+            this.sequence = SEQUENCE.incrementAndGet();
         }
     }
 }

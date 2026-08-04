@@ -1,6 +1,7 @@
 package ykd.ykd.memory.service.impl;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ykd.ykd.memory.mapper.ConversationMessageMapper;
@@ -10,6 +11,7 @@ import ykd.ykd.memory.service.ConversationHistoryService;
 import java.time.LocalDateTime;
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ConversationHistoryServiceImpl
@@ -161,5 +163,17 @@ public class ConversationHistoryServiceImpl
                     .build();
             conversationMessageMapper.insert(copy);
         }
+    }
+
+    @Override
+    public int cleanupOldMessages(int retentionDays) {
+        if (retentionDays < 1) {
+            return 0;
+        }
+        int deleted = conversationMessageMapper.deleteOlderThan("-" + retentionDays + " days");
+        if (deleted > 0) {
+            log.info("[Conversation] 清理过期历史消息: retentionDays={}, deleted={}", retentionDays, deleted);
+        }
+        return deleted;
     }
 }

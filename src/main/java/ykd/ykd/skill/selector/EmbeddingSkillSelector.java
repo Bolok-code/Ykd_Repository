@@ -38,11 +38,22 @@ public class EmbeddingSkillSelector implements SkillSelector {
      */
     private static final Set<String> KEYWORD_BLACKLIST = Set.of("简历");
 
+    /**
+     * 允许以 2 字子串命中的强特征词。
+     * 长片段里的 2 字子串大多过泛（"使用""测试"等），只对真正高区分的词放行，
+     * 例如用户说"猎聘"基本必然指向投递技能。
+     */
+    private static final Set<String> STRONG_2CHAR_KEYWORDS = Set.of("猎聘", "投递", "岗位");
+
+    /** Embedding 构建失败后的冷启动重试间隔，避免 API 不可用时每条消息都触发重建 */
+    private static final long REBUILD_RETRY_INTERVAL_MS = 60_000L;
+
     private final SkillRegistry skillRegistry;
     private final EmbeddingService embeddingService;
 
     /** Skill name → description embedding vector */
     private final Map<String, float[]> skillEmbeddings = new ConcurrentHashMap<>();
+    private long lastBuildAttemptAt = 0L;
 
     public EmbeddingSkillSelector(
             SkillRegistry skillRegistry,
@@ -84,10 +95,32 @@ public class EmbeddingSkillSelector implements SkillSelector {
         }
     }
 
+    /**
+     * Embedding 缓存为空时（启动构建失败/API 暂时不可用）按间隔懒重试。
+     * 构建成功一次后缓存非空，后续不会再触发。
+     */
+    private synchronized void maybeRebuildEmbeddingCache() {
+        long now = System.currentTimeMillis();
+        if (now - lastBuildAttemptAt < REBUILD_RETRY_INTERVAL_MS) {
+            return;
+        }
+        lastBuildAttemptAt = now;
+        try {
+            buildEmbeddingCache();
+        } catch (Exception e) {
+            log.warn("[SkillSelector] Embedding 缓存重建失败，稍后重试: {}", e.getMessage());
+        }
+    }
+
     @Override
     public Optional<SkillDefinition> select(String message) {
         if (message == null || message.isBlank()) {
             return Optional.empty();
+        }
+
+        // 启动时 Embedding 构建失败（缓存为空）时懒重试，避免 Skill 路由永久退化
+        if (skillEmbeddings.isEmpty()) {
+            maybeRebuildEmbeddingCache();
         }
 
         String trimmed = message.trim();
@@ -181,9 +214,12 @@ public class EmbeddingSkillSelector implements SkillSelector {
 
     /**
      * 计算 Skill 的 description + name 与用户消息的匹配程度。
-     * 先将 description 按标点切分为片段，完整片段命中直接返回其长度；
-     * 长片段（>3 字）未完整命中时，进一步检查其 2~4 字子串，
-     * 确保"猎聘"、"投递"等嵌入在长句中的特征词能被提取到。
+     * 先将 description 按标点切分为片段：
+     * <ul>
+     *   <li>完整片段命中直接返回其长度（整段短语置信度高）</li>
+     *   <li>长片段（>3 字）未完整命中时检查 3~4 字子串</li>
+     *   <li>2 字子串太泛（"使用""测试"易误命中），只放行强特征词（如"猎聘"）</li>
+     * </ul>
      *
      * @return 用户消息中包含的最长匹配片段长度，0 表示未命中
      */
@@ -204,16 +240,24 @@ public class EmbeddingSkillSelector implements SkillSelector {
                 continue;
             }
 
-            // 长片段未完整命中 → 检查 2~4 字子串
+            // 长片段未完整命中 → 检查 3~4 字子串
             if (trimmed.length() > 3) {
                 int subMax = Math.min(4, trimmed.length() - 1);
-                for (int len = subMax; len >= 2; len--) {
+                for (int len = subMax; len >= 3; len--) {
                     for (int i = 0; i <= trimmed.length() - len; i++) {
                         String sub = trimmed.substring(i, i + len);
                         if (KEYWORD_BLACKLIST.contains(sub)) continue;
                         if (normalizedMessage.contains(sub)) {
                             maxLen = Math.max(maxLen, len);
                         }
+                    }
+                }
+                // 2 字强特征词单独放行，避免"使用""测试"等泛词误命中
+                for (String kw : STRONG_2CHAR_KEYWORDS) {
+                    if (!KEYWORD_BLACKLIST.contains(kw)
+                            && trimmed.contains(kw)
+                            && normalizedMessage.contains(kw)) {
+                        maxLen = Math.max(maxLen, 2);
                     }
                 }
             }

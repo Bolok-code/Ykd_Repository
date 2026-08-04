@@ -4,6 +4,13 @@ spring:
   config:
     import: optional:file:./config/application-local.yml
   ai:
+    # API 网络抖动自动重试（默认 Spring AI 会重试 10 次，这里收敛为 3 次并带退避）
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 10s
     chat:
       client:
         enabled: false
@@ -35,10 +42,13 @@ spring:
         male-voice-id: pNInz6obpgDQGcFmaJgB
         model: eleven_turbo_v2_5
   datasource:
-    url: jdbc:sqlite:./work/sqlite/conversation.db
+    # 工作目录根可被 YKD_WORK_DIR 环境变量覆盖，避免换目录启动时创建空库
+    url: jdbc:sqlite:${YKD_WORK_DIR:./work}/sqlite/conversation.db
     driver-class-name: org.sqlite.JDBC
     hikari:
       maximum-pool-size: 1
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
   sql:
     init:
@@ -75,6 +85,14 @@ liepin:
 mybatis:
   configuration:
     map-underscore-to-camel-case: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: when-authorized
 rag:
   enabled: true
   chunk-size: 300

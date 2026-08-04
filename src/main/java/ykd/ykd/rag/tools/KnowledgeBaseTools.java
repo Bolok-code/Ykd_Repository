@@ -41,37 +41,37 @@ public class KnowledgeBaseTools {
      * 将文档添加到知识库
      */
     @Tool(description = "将刚才解析的文档添加到个人知识库。用户说'把这份文档加入知识库'、'保存到我的知识库'、'记住这份资料'时调用此工具")
-    public String addDocumentToKnowledgeBase(
-            @ToolParam(description = "操作说明，如'好的，正在添加'") String action) {
-        
+    public String addDocumentToKnowledgeBase() {
+
         String userId = userContext.getCurrentUserId();
         log.info("[KnowledgeBaseTools] 添加文档到知识库: userId={}", userId);
-        
+
         // 1. 检查是否有缓存的文档
         if (!DocumentTools.hasCachedDocument(userId)) {
             return "❌ 没有检测到待添加的文档。请先发送文件并让我解析，然后再说'加入知识库'。";
         }
-        
+
         // 2. 获取缓存的文档信息
         String fileName = DocumentTools.getCachedFileName(userId);
         String content = DocumentTools.getCachedContent(userId);
-        
+
         if (content == null || content.isBlank()) {
             return "❌ 文档内容为空，无法添加到知识库。";
         }
-        
+
         try {
             // 3. 估算片段数量
             int estimatedChunks = ingestionService.estimateChunkCount(content);
-            
-            log.info("[KnowledgeBaseTools] 开始入库: fileName={}, contentLength={}, estimatedChunks={}", 
+
+            log.info("[KnowledgeBaseTools] 开始入库: fileName={}, contentLength={}, estimatedChunks={}",
                     fileName, content.length(), estimatedChunks);
-            
-            // 4. 执行入库操作
+
+            // 4. 执行入库操作，文件类型根据扩展名推断
+            String fileType = detectFileType(fileName);
             Long documentId = ingestionService.ingestDocument(
-                    userId, 
-                    fileName, 
-                    "文档", // 可以从 DocumentTools 获取更准确的类型
+                    userId,
+                    fileName,
+                    fileType,
                     content
             );
             
@@ -218,5 +218,20 @@ public class KnowledgeBaseTools {
             log.error("[KnowledgeBaseTools] 删除文档失败: {}", e.getMessage(), e);
             return "❌ 删除文档失败：" + e.getMessage();
         }
+    }
+
+    /**
+     * 根据文件扩展名推断真实文档类型，避免入库时硬编码为"文档"。
+     */
+    private String detectFileType(String fileName) {
+        if (fileName == null) return "文档";
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".pdf")) return "PDF";
+        if (lower.endsWith(".docx") || lower.endsWith(".doc")) return "Word";
+        if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) return "Excel";
+        if (lower.endsWith(".md")) return "Markdown";
+        if (lower.endsWith(".txt")) return "文本";
+        if (lower.endsWith(".csv")) return "CSV";
+        return "文档";
     }
 }
