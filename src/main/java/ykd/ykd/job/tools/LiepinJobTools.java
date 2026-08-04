@@ -128,13 +128,14 @@ public class LiepinJobTools {
         return taskManager.latestStatus(requireUserId());
     }
 
-    @Tool(description = "取消当前用户最近一次猎聘求职任务。取消成功后技能模式自动退出，后续可直接进行普通对话。")
+    @Tool(description = "取消当前用户最近一次猎聘求职任务。取消后仍停留在猎聘技能模式，可继续管理投递计划。")
     public String cancelLiepinJobTask() {
         String userId = requireUserId();
         String result = taskManager.cancelLatest(userId);
         if (result.startsWith("已取消")) {
-            skillSessionManager.remove(userId);
-            return result + " 已自动退出猎聘技能模式，如需再次搜索岗位或创建投递计划，随时告诉我。";
+            // 不能自动退出技能模式——用户可能紧接着要停止/暂停投递计划等，
+            // 自动退出会让后续"停掉他"这类跟进命令失去猎聘工具，导致误判。
+            return result + " 技能模式保持中，可继续管理投递计划；退出请说\"退出猎聘\"。";
         }
         return result;
     }
@@ -170,13 +171,13 @@ public class LiepinJobTools {
         return campaignService.pauseLatest(requireUserId());
     }
 
-    @Tool(description = "永久停止当前用户最近的猎聘全自动投递计划。停止成功后技能模式自动退出，后续可直接进行普通对话。")
+    @Tool(description = "永久停止当前用户最近的猎聘全自动投递计划。停止后仍停留在猎聘技能模式，可继续其他猎聘操作。")
     public String stopLiepinAutoApplyCampaign() {
         String userId = requireUserId();
         String result = campaignService.stopLatest(userId);
         if (result.startsWith("已停止")) {
-            skillSessionManager.remove(userId);
-            return result + " 已自动退出猎聘技能模式，如需再次搜索岗位或创建投递计划，随时告诉我。";
+            // 同 cancelLiepinJobTask：不能自动退出技能模式，保持连续管理能力
+            return result + " 技能模式保持中，可继续其他猎聘操作；退出请说\"退出猎聘\"。";
         }
         return result;
     }
