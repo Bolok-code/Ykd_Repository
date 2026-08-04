@@ -97,13 +97,18 @@ public interface ConversationMessageMapper {
     List<ConversationMessage> findAllByUserId(@Param("userId") String userId);
 
     /**
-     * 删除早于指定天数的所有消息，用于全局清理防止表无限增长。
-     * datetime() 兼容 Java 写入的 ISO-8601（含 T）和 SQLite DEFAULT 的 "YYYY-MM-DD HH:MM:SS"。
+     * 删除早于指定截止时间的消息，用于全局清理防止表无限增长。
+     *
+     * <p>直接按字符串比较 created_at，可命中 {@code idx_conversation_message_created_at} 索引，
+     * 避免 {@code datetime()} 包裹列导致的全表扫描。应用写入的 created_at 均为
+     * {@code LocalDateTime.now().toString()}（ISO-8601 含 T），可正确比较。</p>
+     *
+     * @param cutoffIso 截止时间（ISO-8601 字符串），早于它的消息被删除
      */
     @Delete("""
             DELETE FROM conversation_message
-            WHERE datetime(created_at) < datetime('now', #{modifier})
+            WHERE created_at < #{cutoffIso}
             """)
-    int deleteOlderThan(@Param("modifier") String modifier);
+    int deleteOlderThan(@Param("cutoffIso") String cutoffIso);
 
 }

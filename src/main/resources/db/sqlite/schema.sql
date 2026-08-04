@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS conversation_message (
 CREATE INDEX IF NOT EXISTS idx_conversation_message_user_id_id
     ON conversation_message (user_id, id DESC);  -- 查用户最近 N 条消息
 
+-- 全局清理（按 created_at 字符串比较删除过期消息），避免全表扫描
+CREATE INDEX IF NOT EXISTS idx_conversation_message_created_at
+    ON conversation_message (created_at);
+
 
 -- ================================================================================
 -- 2. liepin_resume — 简历内容（纯文本）

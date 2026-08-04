@@ -54,6 +54,10 @@ public class UnifiedReminderManager {
     private final ThreadPoolTaskScheduler taskScheduler = new ThreadPoolTaskScheduler();
     private final Map<String, ReminderTask> tasks = new ConcurrentHashMap<>();
     private final Set<String> pausedTaskIds = ConcurrentHashMap.newKeySet();
+    /** 任务被暂停的时刻（taskId → 时间戳），用于清理长期未恢复的暂停任务 */
+    private final Map<String, Long> pausedAt = new ConcurrentHashMap<>();
+    /** 暂停任务保留时长：超时且用户一直没发消息恢复的，清理掉并取消 DB 记录 */
+    private static final long STALE_PAUSED_MS = 7L * 24 * 60 * 60 * 1000;
 
     /** 提醒排序：先按创建时间，时间相同按插入序号，保证同毫秒内调度也能保持插入顺序 */
     private static final Comparator<ReminderTask> TaskOrder =
@@ -77,6 +81,34 @@ public class UnifiedReminderManager {
         taskScheduler.setPoolSize(4);
         taskScheduler.setThreadNamePrefix("reminder-");
         taskScheduler.initialize();
+        // 定期清理长期未恢复的暂停任务，1 小时后开始，每 6 小时一次
+        taskScheduler.scheduleAtFixedRate(this::sweepStalePausedTasks,
+                Instant.now().plusSeconds(3600), Duration.ofHours(6));
+    }
+
+    /**
+     * 清理超过 STALE_PAUSED_MS 仍未恢复的暂停任务（用户可能已放弃该提醒）。
+     * 同时取消 DB 记录，避免下次启动恢复时重新加载。
+     */
+    private void sweepStalePausedTasks() {
+        if (pausedAt.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, Long> entry : pausedAt.entrySet()) {
+            String taskId = entry.getKey();
+            if (now - entry.getValue() < STALE_PAUSED_MS) continue;
+            ReminderTask task = tasks.remove(taskId);
+            pausedAt.remove(taskId);
+            pausedTaskIds.remove(taskId);
+            if (task != null && task.future != null) {
+                try { task.future.cancel(false); } catch (Exception ignored) {}
+            }
+            try {
+                reminderTaskMapper.cancelByTaskId(taskId);
+            } catch (Exception e) {
+                log.warn("[Reminder] 清理暂停任务时取消 DB 记录失败: taskId={}", taskId);
+            }
+            log.info("[Reminder] 清理长期未恢复的暂停任务: taskId={}", taskId);
+        }
     }
 
     @PreDestroy
@@ -311,6 +343,8 @@ public class UnifiedReminderManager {
             return "取消失败，请重试";
         }
         tasks.remove(task.taskId);
+        pausedTaskIds.remove(task.taskId);
+        pausedAt.remove(task.taskId);
         reminderTaskMapper.cancelByTaskId(task.taskId);
         log.info("[Reminder] 已取消: taskId={}, userId={}, msg={}", task.taskId, userId, task.message);
         return "已取消提醒：" + task.message;
@@ -364,6 +398,7 @@ public class UnifiedReminderManager {
 
     private void pauseTask(ReminderTask task) {
         pausedTaskIds.add(task.taskId);
+        pausedAt.put(task.taskId, System.currentTimeMillis());
         if (task.future != null) {
             task.future.cancel(false);
         }
@@ -384,6 +419,7 @@ public class UnifiedReminderManager {
         log.info("[Reminder] 恢复暂停任务: userId={}, count={}", userId, toResume.size());
         for (ReminderTask task : toResume) {
             pausedTaskIds.remove(task.taskId);
+            pausedAt.remove(task.taskId);
             rescheduleTask(task);
         }
         try {

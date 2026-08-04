@@ -170,9 +170,11 @@ public class ConversationHistoryServiceImpl
         if (retentionDays < 1) {
             return 0;
         }
-        int deleted = conversationMessageMapper.deleteOlderThan("-" + retentionDays + " days");
+        String cutoff = LocalDateTime.now().minusDays(retentionDays).toString();
+        int deleted = conversationMessageMapper.deleteOlderThan(cutoff);
         if (deleted > 0) {
-            log.info("[Conversation] 清理过期历史消息: retentionDays={}, deleted={}", retentionDays, deleted);
+            log.info("[Conversation] 清理过期历史消息: retentionDays={}, cutoff={}, deleted={}",
+                    retentionDays, cutoff, deleted);
         }
         return deleted;
     }

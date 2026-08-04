@@ -25,6 +25,10 @@ public class ApiKeyStartupValidator implements ApplicationRunner {
 
     private static final String PLACEHOLDER = "changeme";
 
+    /** 整体开关：某些部署只需部分服务时，可设 ykd.api-key-validation.enabled=false 关闭校验 */
+    @Value("${ykd.api-key-validation.enabled:true}")
+    private boolean validationEnabled;
+
     @Value("${spring.ai.openai.api-key:}")
     private String openaiApiKey;
 
@@ -42,28 +46,34 @@ public class ApiKeyStartupValidator implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!validationEnabled) {
+            log.warn("[Config] API Key 校验已通过配置关闭（ykd.api-key-validation.enabled=false）");
+            return;
+        }
+
         Map<String, String> placeholders = new LinkedHashMap<>();
-        collectPlaceholder(openaiApiKey, "spring.ai.openai.api-key（对话模型）", placeholders);
-        collectPlaceholder(embeddingApiKey, "spring.ai.openai.embedding.api-key（Embedding）", placeholders);
-        collectPlaceholder(deepseekApiKey, "spring.ai.deepseek.api-key（DeepSeek）", placeholders);
-        collectPlaceholder(elevenlabsApiKey, "spring.ai.elevenlabs.api-key（语音合成）", placeholders);
-        collectPlaceholder(gaodeKey, "gaode.key（高德定位）", placeholders);
+        collectMissing(openaiApiKey, "spring.ai.openai.api-key（对话模型）", placeholders);
+        collectMissing(embeddingApiKey, "spring.ai.openai.embedding.api-key（Embedding）", placeholders);
+        collectMissing(deepseekApiKey, "spring.ai.deepseek.api-key（DeepSeek）", placeholders);
+        collectMissing(elevenlabsApiKey, "spring.ai.elevenlabs.api-key（语音合成）", placeholders);
+        collectMissing(gaodeKey, "gaode.key（高德定位）", placeholders);
 
         if (placeholders.isEmpty()) {
             log.info("[Config] API Key 校验通过");
             return;
         }
 
-        StringBuilder sb = new StringBuilder("检测到仍为占位符的 API Key，应用已停止启动：\n");
+        StringBuilder sb = new StringBuilder("检测到缺失或仍为占位符的 API Key，应用已停止启动：\n");
         placeholders.forEach((name, value) -> sb.append("  - ").append(name).append(" = ").append(value).append('\n'));
         sb.append("请将真实 Key 填入 config/application-local.yml（参考 application-local.yml.example），")
-          .append("或确认 local 配置已正确加载。");
+          .append("或确认 local 配置已正确加载；如确需部分服务运行，可设置 ykd.api-key-validation.enabled=false。");
         throw new IllegalStateException(sb.toString());
     }
 
-    private void collectPlaceholder(String value, String propertyName, Map<String, String> collector) {
-        if (value != null && !value.isBlank() && PLACEHOLDER.equalsIgnoreCase(value.trim())) {
-            collector.put(propertyName, value.trim());
+    private void collectMissing(String value, String propertyName, Map<String, String> collector) {
+        String display = value == null || value.isBlank() ? "(未配置)" : value.trim();
+        if (value == null || value.isBlank() || PLACEHOLDER.equalsIgnoreCase(value.trim())) {
+            collector.put(propertyName, display);
         }
     }
 }
