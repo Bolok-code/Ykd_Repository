@@ -92,6 +92,8 @@ public class LiepinJobTools {
             return "没有找到刚才解析的文件，请先发送简历文件。";
         }
         resumeService.save(userId, fileName, content, originalBytes);
+        // 文件已存为简历（消费完毕），清除缓存，避免残留被后续无关 Skill 误读
+        DocumentTools.clearCachedDocument(userId);
         boolean attachmentAvailable = resumeService.find(userId).getFilePath() != null;
         return "已把\"" + fileName + "\"保存为当前猎聘求职简历。"
                 + (attachmentAvailable ? "已保留原文件，可选择在线简历或附件简历投递。"

@@ -78,10 +78,10 @@ public class KnowledgeBaseTools {
                     fileType,
                     content
             );
-            
-            // 5. 清除缓存（可选，根据需求决定）
-            // DocumentTools.clearCachedDocument(userId);
-            
+
+            // 5. 文件已入库（消费完毕），清除缓存，避免残留被后续无关 Skill 误读
+            DocumentTools.clearCachedDocument(userId);
+
             String result = String.format(
                     "✅ 文档已成功添加到知识库！\n\n" +
                     "📄 文件名：%s\n" +
