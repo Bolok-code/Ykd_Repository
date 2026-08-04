@@ -243,10 +243,11 @@ public class MessageProcessor {
 
 
             if (text != null && !text.isBlank()) {
-                // 命中 Skill 命令时，清除文件缓存并走正常路由（Skill 提示词不应被文件上下文污染）
+                // 命中 Skill 命令时走正常路由（不注入文件上下文，Skill 提示词不被污染）。
+                // 注意：绝不能清除文件缓存——knowledge-base 的 addDocumentToKnowledgeBase、
+                // liepin 的 saveCurrentDocumentAsLiepinResume 都要从缓存读取刚收到的文件。
                 if (isSkillCommand(text)) {
-                    DocumentTools.clearCachedDocument(fromUserId);
-                    log.info("[Processor] 检测到 Skill 命令，退出文件追问模式: userId={}, text={}",
+                    log.info("[Processor] 检测到 Skill 命令，走正常路由: userId={}, text={}",
                             fromUserId, text);
                 } else {
                     String cachedContent = DocumentTools.getCachedContent(fromUserId);
