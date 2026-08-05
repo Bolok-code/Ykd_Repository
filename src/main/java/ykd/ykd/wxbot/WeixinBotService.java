@@ -203,13 +203,19 @@ public class WeixinBotService {
                 messageProcessor, reminderManager,
                 () -> onSessionReady(botUserId));
         pendingSessions.put(botUserId, session);
-        String qr = session.login();
-        if (qr == null) {
-            // session 文件已恢复成功，直接移到 online
+        try {
+            String qr = session.login();
+            if (qr == null) {
+                // session 文件已恢复成功，直接移到 online
+                pendingSessions.remove(botUserId);
+                sessions.put(botUserId, session);
+            }
+            return qr;
+        } catch (Exception e) {
             pendingSessions.remove(botUserId);
-            sessions.put(botUserId, session);
+            session.close();
+            throw e;
         }
-        return qr;
     }
 
     private void migrateOldSession() {
