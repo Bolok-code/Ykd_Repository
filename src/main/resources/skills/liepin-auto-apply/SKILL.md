@@ -1,6 +1,6 @@
 ---
 name: liepin-auto-apply
-description: 当用户要求在猎聘搜索岗位、匹配简历、创建自动投递计划或查询投递结果时使用此技能。
+description: 当用户要求在猎聘搜索岗位、匹配简历、创建自动投递计划，或查询、取消、暂停、停止投递计划与任务状态时使用此技能。
 version: 1.0.0
 enabled: true
 tools:

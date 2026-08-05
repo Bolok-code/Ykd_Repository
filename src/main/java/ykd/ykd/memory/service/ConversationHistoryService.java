@@ -42,4 +42,12 @@ public interface ConversationHistoryService {
     void replaceHistory(String userId,
                         String summaryContent,
                         List<ConversationMessage> recentMessages);
+
+    /**
+     * 删除早于指定天数的历史消息（全局清理）。
+     *
+     * @param retentionDays 保留天数，早于该天数的消息被删除
+     * @return 删除的消息条数
+     */
+    int cleanupOldMessages(int retentionDays);
 }

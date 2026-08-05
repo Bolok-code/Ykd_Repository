@@ -6,17 +6,18 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import ykd.ykd.llm.advisor.ReActLoggingAdvisor;
+import ykd.ykd.processor.BoundedResultQueue;
 import ykd.ykd.processor.ProcessResult;
 
 import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 @Configuration
 public class ChatClientConfig {
 
     @Bean
     Queue<ProcessResult> voiceQueue() {
-        return new ConcurrentLinkedQueue<>();
+        // 有界队列：语音播报后若 bot 未及时拉取，音频字节不会无限堆积
+        return new BoundedResultQueue(20);
     }
 
 

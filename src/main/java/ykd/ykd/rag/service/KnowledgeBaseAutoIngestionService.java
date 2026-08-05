@@ -164,11 +164,38 @@ public class KnowledgeBaseAutoIngestionService implements ApplicationRunner {
                 String ext = dot > 0 ? baseName.substring(dot) : "";
                 target = doneDir.resolve(nameWithoutExt + "_" + System.currentTimeMillis() + ext);
             }
-            Files.move(file, target, StandardCopyOption.ATOMIC_MOVE);
+            moveFileSafely(file, target);
             log.debug("[AutoIngest] 文件已移动到: {}", target);
         } catch (IOException e) {
-            log.warn("[AutoIngest] 移动文件失败: {} -> {}, error={}",
+            log.warn("[AutoIngest] 移动文件失败: {} -> {}, 将隔离失败文件: {}",
                     file, doneDir, e.getMessage());
+            quarantineFailed(file);
+        }
+    }
+
+    /**
+     * 尽力移动文件：优先原子移动，失败退化为普通移动（跨文件系统时自动 copy+delete）。
+     */
+    private void moveFileSafely(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicFailure) {
+            Files.move(source, target);
+        }
+    }
+
+    /**
+     * 移动失败时把文件重命名为 {@code <name>.failed.<ts>}，
+     * 使其不再匹配支持的扩展名，避免下次启动对同一损坏文件无限重试。
+     */
+    private void quarantineFailed(Path file) {
+        try {
+            Path quarantined = file.resolveSibling(
+                    file.getFileName() + ".failed." + System.currentTimeMillis());
+            Files.move(file, quarantined);
+            log.warn("[AutoIngest] 失败文件已隔离，不再重试: {}", quarantined);
+        } catch (IOException e) {
+            log.error("[AutoIngest] 隔离失败文件失败: {} -> error={}", file, e.getMessage());
         }
     }
 
@@ -193,7 +220,9 @@ public class KnowledgeBaseAutoIngestionService implements ApplicationRunner {
             }
             return hex.toString();
         } catch (Exception e) {
-            return "fallback_" + content.length() + "_" + System.currentTimeMillis();
+            // 确定性兜底：绝不能带时间戳，否则每次哈希都不同、去重完全失效
+            String text = content == null ? "" : content;
+            return "fallback_" + text.length() + "_" + Integer.toHexString(text.hashCode());
         }
     }
 }

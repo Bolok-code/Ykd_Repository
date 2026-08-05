@@ -247,3 +247,4 @@ public class WeixinBotService {
         return SESSION_DIR.resolve(botUserId + ".json");
     }
 }
+
