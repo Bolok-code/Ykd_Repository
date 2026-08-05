@@ -6,33 +6,226 @@
     <title>YKD Bot 管理</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding-top: 40px; }
-        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 32px; width: 420px; }
-        h1 { font-size: 20px; text-align: center; margin-bottom: 24px; color: #333; }
-        .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; transition: all 0.2s; margin-bottom: 8px; }
-        .btn-primary { background: #4a90d9; color: #fff; }
-        .btn-primary:hover { background: #3a7bc8; }
-        .status { text-align: center; padding: 8px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
-        .status-ok { background: #d4edda; color: #155724; }
-        .status-off { background: #f8d7da; color: #721c24; }
-        .msg { text-align: center; font-size: 13px; color: #666; margin-top: 8px; min-height: 20px; }
-        #qrArea { text-align: center; margin-top: 12px; }
-        #qrArea img { max-width: 200px; border: 1px solid #eee; border-radius: 8px; }
-        #qrArea a { color: #4a90d9; font-size: 13px; word-break: break-all; }
-        .session-list { margin-bottom: 16px; }
-        .session-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
-        .session-item .name { font-weight: 500; color: #333; }
-        .session-item .online { color: #27ae60; font-size: 12px; }
-        .session-item .pending { color: #e67e22; font-size: 12px; }
-        .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; border: none; cursor: pointer; }
-        .btn-sm-danger { background: #e74c3c; color: #fff; }
-        .btn-sm-danger:hover { background: #c0392b; }
-        .divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+
+        body {
+            font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 60px;
+            background: #0a0a0f;
+            background-image:
+                radial-gradient(ellipse at 20% 50%, rgba(72, 0, 255, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(0, 210, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 80%, rgba(255, 0, 128, 0.08) 0%, transparent 50%);
+            color: #e0e0e0;
+        }
+
+        .card {
+            background: rgba(18, 18, 28, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            padding: 32px;
+            width: 440px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        h1 {
+            font-size: 22px;
+            text-align: center;
+            margin-bottom: 28px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #00d2ff, #7b61ff, #ff0080);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 1px;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+
+        .status-ok {
+            background: rgba(0, 255, 136, 0.08);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.15);
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.05);
+        }
+
+        .status-off {
+            background: rgba(255, 60, 60, 0.08);
+            color: #ff4d4d;
+            border: 1px solid rgba(255, 60, 60, 0.15);
+        }
+
+        .session-list { margin-bottom: 20px; }
+
+        .session-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            transition: all 0.2s ease;
+        }
+
+        .session-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .session-item .name { font-weight: 500; color: #ccc; font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
+
+        .session-item .online {
+            color: #00ff88;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .session-item .online::before {
+            content: "";
+            display: inline-block;
+            width: 6px; height: 6px;
+            background: #00ff88;
+            border-radius: 50%;
+            margin-right: 6px;
+            box-shadow: 0 0 8px #00ff88;
+            animation: pulse 2s infinite;
+        }
+
+        .session-item .pending {
+            color: #ffaa00;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .session-item .pending::before {
+            content: "";
+            display: inline-block;
+            width: 6px; height: 6px;
+            background: #ffaa00;
+            border-radius: 50%;
+            margin-right: 6px;
+            box-shadow: 0 0 8px #ffaa00;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .divider {
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            margin: 20px 0;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 13px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #7b61ff, #5b3fff);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(123, 97, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #8b71ff, #6b4fff);
+            box-shadow: 0 6px 25px rgba(123, 97, 255, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary:active { transform: translateY(0); }
+
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 11px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            transition: all 0.2s ease;
+        }
+
+        .btn-sm-danger {
+            background: rgba(255, 60, 60, 0.12);
+            color: #ff4d4d;
+            border: 1px solid rgba(255, 60, 60, 0.2);
+        }
+
+        .btn-sm-danger:hover {
+            background: rgba(255, 60, 60, 0.25);
+            box-shadow: 0 0 12px rgba(255, 60, 60, 0.15);
+        }
+
+        .msg {
+            text-align: center;
+            font-size: 13px;
+            color: #888;
+            margin-top: 12px;
+            min-height: 20px;
+            transition: color 0.2s ease;
+        }
+
+        #qrArea {
+            text-align: center;
+            margin-top: 16px;
+        }
+
+        #qrArea img {
+            max-width: 200px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        #qrArea a {
+            color: #7b61ff;
+            font-size: 13px;
+            word-break: break-all;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        #qrArea a:hover { color: #9b81ff; }
+
+        #qrArea p { color: #555; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>YKD Bot 管理面板</h1>
+        <h1>YKD BOT 管理面板</h1>
 
         <div id="statusBar" class="status status-off">加载中...</div>
 
@@ -52,7 +245,7 @@
         function showMsg(text, isError) {
             const el = document.getElementById('msg');
             el.textContent = text;
-            el.style.color = isError ? '#e74c3c' : '#27ae60';
+            el.style.color = isError ? '#ff4d4d' : '#00ff88';
         }
 
         async function refreshStatus() {
@@ -95,7 +288,7 @@
                 if (r.success && r.qrUrl) {
                     showMsg('请扫描二维码登录');
                     document.getElementById('qrArea').innerHTML =
-                        '<p style="font-size:12px;color:#999;margin-bottom:8px;">微信扫码</p>' +
+                        '<p style="font-size:12px;color:#555;margin-bottom:8px;">微信扫码</p>' +
                         '<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(r.qrUrl) + '" />' +
                         '<br><a href="' + r.qrUrl + '" target="_blank">链接直连</a>';
                 } else if (r.success) {

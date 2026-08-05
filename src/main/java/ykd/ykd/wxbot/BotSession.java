@@ -8,7 +8,6 @@ import com.github.wechat.ilink.sdk.core.listener.OnLoginListener;
 import com.github.wechat.ilink.sdk.core.login.LoginContext;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import lombok.extern.slf4j.Slf4j;
-import ykd.ykd.memory.MemoryManagerService;
 import ykd.ykd.processor.MessageProcessor;
 import ykd.ykd.processor.PerUserTaskDispatcher;
 import ykd.ykd.processor.ProcessResult;
@@ -129,7 +128,7 @@ public class BotSession implements AutoCloseable {
             return qrCodeContent;
         } catch (Exception e) {
             log.error("[BotSession:{}] 获取 QR 码失败", botUserId, e);
-            return null;
+            throw new RuntimeException("获取 QR 码失败: " + e.getMessage(), e);
         }
     }
 
