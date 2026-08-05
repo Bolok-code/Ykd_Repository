@@ -1,24 +1,44 @@
-# 本地开发配置文件模板
-# 复制此文件为 application-local.yml，填入真实密钥
-# cp config/application-local.yml.example config/application-local.yml
+# 本地开发配置模板
+# 复制为 config/application-local.yml 并填入真实密钥：
+#   Windows PowerShell:  Copy-Item config\application-local.yml.example config\application-local.yml
+#   Linux / macOS:       cp config/application-local.yml.example config/application-local.yml
+#
+# 注意：
+#   - config/application-local.yml 已被 .gitignore 忽略，真实密钥不会提交到仓库。
+#   - 请把 key 的 changeme 占位值全部换成真实 Key。ApiKeyStartupValidator 会在启动时
+#     检测到仍为 changeme 的 Key 并快速失败，提示补全，避免带病启动后 AI 功能静默失效。
 
 spring:
   ai:
+    # ── Agnes（识图 / 画图 / 视频，OpenAI 兼容协议）────────────
+    # base-url 与模型名使用 application.yml 中的默认值，这里只需填 Key。
     openai:
-      api-key: sk-your-openai-api-key
+      api-key: changeme
+      # Embedding 走阿里 DashScope，与上方的 Agnes Key 相互独立
+      embedding:
+        api-key: changeme
+        base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        options:
+          model: text-embedding-v3
+    # ── DeepSeek 主对话模型 ─────────────────────────────────
     deepseek:
-      api-key: sk-your-deepseek-api-key
+      api-key: changeme
+    # ── ElevenLabs 语音合成 ─────────────────────────────────
     elevenlabs:
-      api-key: sk-your-elevenlabs-api-key
+      api-key: changeme
+      tts:
+        voice-id: EXAVITQu4vr4xnSDxMaL        # 女声（默认音色）
+        male-voice-id: pNInz6obpgDQGcFmaJgB   # 男声
 
 gaode:
-  key: your-gaode-api-key
+  key: changeme
+
 web-search:
-  enabled: ${WEB_SEARCH_ENABLED:false}
-  api-key: ${VOLCENGINE_SEARCH_API_KEY:}
-  endpoint: ${VOLCENGINE_SEARCH_ENDPOINT:}
-  max-results: ${WEB_SEARCH_MAX_RESULTS:5}
-  timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:15}
+  enabled: true
+  api-key: changeme                           # 火山引擎搜索 API Key
+  endpoint: https://open.feedcoopapi.com/search_api/web_search
+  max-results: 5
+  timeout-seconds: 15
 
 liepin:
   enabled: false

@@ -8,7 +8,7 @@
 
 | 功能 | 实现方式 |
 |---|---|
-| 普通聊天 | Spring AI 调用 DeepSeek `deepseek-chat` |
+| 普通聊天 | Spring AI 调用 DeepSeek `deepseek-v4-flash` |
 | 图片识别 | Agnes `agnes-2.0-flash` 多模态模型 |
 | 图片生成 | Spring AI `ImageModel` 调用 `agnes-image-2.1-flash` |
 | 视频生成 | Agnes Video API，后台异步轮询并主动推送 |
@@ -103,14 +103,21 @@ Copy-Item config\application-local.yml.example config\application-local.yml
 spring:
   ai:
     openai:
-      api-key: your-agnes-api-key
+      api-key: changeme                  # 识图/画图/视频（Agnes）
+      embedding:
+        api-key: changeme                # Embedding（阿里 DashScope）
     deepseek:
-      api-key: your-deepseek-api-key
+      api-key: changeme                  # 主对话模型
     elevenlabs:
-      api-key: your-elevenlabs-api-key
+      api-key: changeme                  # 语音合成
 
 gaode:
-  key: your-gaode-api-key
+  key: changeme                          # 高德定位/天气
+
+web-search:
+  enabled: true
+  api-key: changeme                      # 火山引擎搜索
+  endpoint: https://open.feedcoopapi.com/search_api/web_search
 ```
 
 `config/application-local.yml` 已加入 `.gitignore`，禁止将真实密钥提交到 GitHub。当前版本的聊天和位置记忆使用内存存储，运行项目不依赖 MySQL；模板中的数据库配置可以暂不填写。

@@ -203,16 +203,4 @@ public class EmbeddingService {
         return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
     }
     
-    /**
-     * 计算两个向量的余弦相似度（JSON 格式输入）
-     * 
-     * @param json1 向量1的JSON字符串
-     * @param json2 向量2的JSON字符串
-     * @return 相似度（0-1之间）
-     */
-    public double cosineSimilarity(String json1, String json2) {
-        float[] vec1 = jsonToFloatArray(json1);
-        float[] vec2 = jsonToFloatArray(json2);
-        return cosineSimilarity(vec1, vec2);
-    }
 }

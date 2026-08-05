@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -49,6 +51,17 @@ public class BotSession implements AutoCloseable {
     private static final long MIN_SEND_INTERVAL_MS = 2_000L;
     private static final long RETRY_DELAY_MS = 2_000L;
 
+    /** 会话创建时间，用于 WeixinBotService 对待扫码会话做超时清理 */
+    private final long createdAtMs = System.currentTimeMillis();
+    /** 发送限速调度器：把待发送消息延迟到时间槽，不阻塞消息处理工作线程 */
+    private final ScheduledExecutorService senderScheduler;
+    /** 空轮询时的心跳持久化间隔，避免频繁写盘又不会丢失 updates cursor */
+    private static final long SESSION_SAVE_HEARTBEAT_MS = 30_000L;
+    /** 轮询连续失败阈值，达到后停止轮询，避免持久性错误无限重试 */
+    private static final int MAX_CONSECUTIVE_ERRORS = 20;
+    private int consecutiveErrors = 0;
+    private long lastSessionSaveAt = 0L;
+
     private volatile boolean running = true;
 
     public BotSession(String botUserId, Path sessionFile, ObjectMapper objectMapper,
@@ -61,10 +74,19 @@ public class BotSession implements AutoCloseable {
         this.reminderManager = reminderManager;
         this.onReady = onReady;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
+        this.senderScheduler = Executors.newScheduledThreadPool(1, r -> {
+            Thread t = new Thread(r, "wx-sender-" + botUserId);
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     public String getBotUserId() {
         return botUserId;
+    }
+
+    public long getCreatedAtMs() {
+        return createdAtMs;
     }
 
     public boolean awaitReady(long timeoutSeconds) {
@@ -127,6 +149,8 @@ public class BotSession implements AutoCloseable {
             log.info("[BotSession:{}] 请扫码登录: {}", botUserId, qrCodeContent);
             return qrCodeContent;
         } catch (Exception e) {
+            // 不能返回 null：null 已保留给"session 恢复成功"这一唯一含义。
+            // 获取二维码失败必须抛异常，否则上层会把未登录的会话误当成已在线。
             log.error("[BotSession:{}] 获取 QR 码失败", botUserId, e);
             throw new RuntimeException("获取 QR 码失败: " + e.getMessage(), e);
         }
@@ -159,49 +183,24 @@ public class BotSession implements AutoCloseable {
                             break;
                         }
 
-                        String cursorBefore = currentClient.exportResumeContext().getUpdatesCursor();
                         List<WeixinMessage> messages = currentClient.getUpdates();
-                        String cursorAfter = currentClient.exportResumeContext().getUpdatesCursor();
-                        saveSession(currentClient.exportResumeContext());
-
-                        int msgCount = (messages != null) ? messages.size() : 0;
-                        boolean cursorChanged = !java.util.Objects.equals(cursorBefore, cursorAfter);
-
-                        if (cursorChanged && msgCount == 0) {
-                            log.warn("[BotSession:{}] Cursor已更新但返回0条消息，尝试用旧cursor重试...", botUserId);
-                            try {
-                                java.lang.reflect.Field csField = currentClient.getClass().getDeclaredField("cursorStore");
-                                csField.setAccessible(true);
-                                Object cursorStore = csField.get(currentClient);
-                                java.lang.reflect.Method putMethod = cursorStore.getClass().getMethod("put", String.class);
-                                putMethod.invoke(cursorStore, cursorBefore);
-
-                                sleep(1000);
-                                List<WeixinMessage> retryMessages = currentClient.getUpdates();
-                                int retryCount = (retryMessages != null) ? retryMessages.size() : 0;
-                                log.info("[BotSession:{}] 重试结果: 消息数={}", botUserId, retryCount);
-
-                                if (retryMessages != null && !retryMessages.isEmpty()) {
-                                    for (WeixinMessage message : retryMessages) {
-                                        handleMessage(message);
-                                        reminderManager.resumeAllForUser(message.getFrom_user_id());
-                                    }
-                                }
-                            } catch (Exception ex) {
-                                log.error("[BotSession:{}] 重试失败: {}", botUserId, ex.getMessage());
-                            }
-                        }
-
-                        if (messages != null) {
+                        // 拿到新消息时才写 session；空轮询每 30 秒做一次心跳持久化，
+                        // 既减少磁盘 IO，又避免长时间空轮询后丢失 updates cursor
+                        if (messages != null && !messages.isEmpty()) {
+                            saveSession(currentClient.exportResumeContext());
                             for (WeixinMessage message : messages) {
                                 handleMessage(message);
                                 reminderManager.resumeAllForUser(message.getFrom_user_id());
                             }
+                        } else if (System.currentTimeMillis() - lastSessionSaveAt > SESSION_SAVE_HEARTBEAT_MS) {
+                            saveSession(currentClient.exportResumeContext());
                         }
 
                         sendCompletedVideo();
                         sendCompletedImageBatch();
                         sendCompletedLiepinTask();
+
+                        consecutiveErrors = 0;
 
                     } catch (SessionExpiredException e) {
                         log.warn("[BotSession:{}] 轮询异常-会话过期: {}", botUserId, e.getMessage());
@@ -209,9 +208,11 @@ public class BotSession implements AutoCloseable {
                         break;
                     } catch (IOException e) {
                         log.warn("[BotSession:{}] 轮询异常-IO: {}", botUserId, e.getMessage());
+                        if (!handlePollError()) break;
                         if (running) sleep(RETRY_DELAY_MS);
                     } catch (Exception e) {
                         log.error("[BotSession:{}] 消息轮询异常", botUserId, e);
+                        if (!handlePollError()) break;
                         if (running) sleep(RETRY_DELAY_MS);
                     }
                 }
@@ -253,16 +254,28 @@ public class BotSession implements AutoCloseable {
 
     // ── 发送方法 ──────────────────────────────────────────────
 
+    /**
+     * 发送文本，带同用户限速。
+     *
+     * <p>不阻塞调用线程：需要等待限速间隔时，把发送动作丢给调度器延迟执行，
+     * 避免消息处理工作线程被 Thread.sleep 卡住。</p>
+     */
     public void safeSendText(String userId, String text) {
         long now = System.currentTimeMillis();
-        Long last = lastSendTime.get(userId);
-        if (last != null) {
-            long gap = now - last;
-            if (gap < MIN_SEND_INTERVAL_MS) sleep(MIN_SEND_INTERVAL_MS - gap);
+        // 原子地预约下一条消息的发送时间槽，保证同用户消息间隔 >= MIN_SEND_INTERVAL_MS
+        long sendAt = lastSendTime.compute(userId,
+                (k, last) -> Math.max(now, last == null ? now : last + MIN_SEND_INTERVAL_MS));
+        long delayMs = sendAt - now;
+        if (delayMs > 0) {
+            senderScheduler.schedule(() -> doSendText(userId, text), delayMs, TimeUnit.MILLISECONDS);
+        } else {
+            doSendText(userId, text);
         }
+    }
+
+    private void doSendText(String userId, String text) {
         try {
             client.sendText(userId, text);
-            lastSendTime.put(userId, System.currentTimeMillis());
         } catch (Exception e) {
             log.error("[BotSession:{}] 发送文本失败: userId={}", botUserId, userId, e);
         }
@@ -340,6 +353,7 @@ public class BotSession implements AutoCloseable {
 
     private void saveSession(ResumeContext resumeContext) {
         if (resumeContext == null || resumeContext.getLoginContext() == null) return;
+        lastSessionSaveAt = System.currentTimeMillis();
         LoginContext login = resumeContext.getLoginContext();
         SessionData data = new SessionData(login.getBotToken(), login.getUserId(),
                 login.getBotId(), login.getBaseUrl(), resumeContext.getUpdatesCursor());
@@ -393,8 +407,23 @@ public class BotSession implements AutoCloseable {
     @Override
     public void close() {
         running = false;
+        senderScheduler.shutdownNow();
         dispatcher.close(Duration.ofSeconds(15));
         closeClient();
+    }
+
+    /**
+     * 累计轮询连续失败次数，超过阈值返回 false 以停止轮询。
+     *
+     * @return true=继续重试；false=应停止轮询
+     */
+    private boolean handlePollError() {
+        consecutiveErrors++;
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            log.error("[BotSession:{}] 轮询连续失败 {} 次，停止轮询", botUserId, MAX_CONSECUTIVE_ERRORS);
+            return false;
+        }
+        return true;
     }
 
     private void sleep(long ms) {
