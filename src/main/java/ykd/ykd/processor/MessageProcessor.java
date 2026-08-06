@@ -12,6 +12,7 @@ import ykd.ykd.job.service.LiepinResumeService;
 import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.llm.tools.DocumentTools;
 import ykd.ykd.skill.model.SkillDefinition;
+import ykd.ykd.skill.selector.SkillSelectionResult;
 import ykd.ykd.skill.selector.SkillSelector;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
@@ -29,7 +30,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.Base64;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -516,8 +516,8 @@ public class MessageProcessor {
     private boolean isSkillCommand(String text) {
         if (text == null || text.isBlank()) return false;
         try {
-            Optional<SkillDefinition> skill = skillSelector.select(text);
-            return skill.isPresent();
+            SkillSelectionResult result = skillSelector.select(text);
+            return result.isActivate() || result.isConfirm();
         } catch (Exception e) {
             log.warn("[Processor] Skill 命令检测失败，按普通消息处理: {}", e.getMessage());
             return false;

@@ -31,6 +31,23 @@ public interface LlmService {
     String chat(String text, List<String> imageUrls, ChatClient client, String userId, String systemContext);
 
     /**
+     * 带技能路由开关的聊天请求。
+     *
+     * <p>{@code skillEnabled=false} 用于系统生成的消息（如定时提醒）：跳过技能匹配，
+     * 不激活技能、不消费/写入待确认状态，工具集固定为通用工具，避免提醒被用户
+     * 活跃的技能会话劫持。用户的技能会话状态保持不变。</p>
+     *
+     * @param text          消息文本（系统生成时为提醒内容）
+     * @param imageUrls     图片 URL 列表
+     * @param client        ChatClient 实例
+     * @param userId        用户 ID
+     * @param systemContext 系统消息上下文；为 {@code null} 时不注入
+     * @param skillEnabled  是否参与技能匹配与会话保持
+     */
+    String chat(String text, List<String> imageUrls, ChatClient client, String userId,
+                String systemContext, boolean skillEnabled);
+
+    /**
      * 手动清除指定用户的活跃 Skill 会话，返回是否确实存在活跃会话。
      */
     boolean exitSkill(String userId);

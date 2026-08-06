@@ -166,12 +166,16 @@ public class LiepinJobTaskManager {
     /**
      * 确认投递候选列表中的某个职位。
      * 提交单个职位的申请到工作线程，发起聊一聊并发送简历。
+     *
+     * <p>同一搜索任务支持逐个投递多个候选：任务成功（{@code SUCCEEDED}）后
+     * 仍可继续确认其他岗位；已投递成功的岗位（{@code SUBMITTED}）不会重复投递。</p>
      */
     public String confirmApplication(String userId, int candidateIndex) {
         LiepinJobTask task = taskMapper.findLatestByUser(userId);
         if (task == null) return "暂无可确认的猎聘求职任务。";
         if (!LiepinTaskStatus.WAITING_CONFIRMATION.name().equals(task.getStatus())
-                && !LiepinTaskStatus.NEEDS_USER_ACTION.name().equals(task.getStatus())) {
+                && !LiepinTaskStatus.NEEDS_USER_ACTION.name().equals(task.getStatus())
+                && !LiepinTaskStatus.SUCCEEDED.name().equals(task.getStatus())) {
             return "当前任务状态为 " + task.getStatus() + "，还不能提交岗位。";
         }
         LiepinResume resume = resumeService.find(userId);
@@ -181,6 +185,15 @@ public class LiepinJobTaskManager {
             return "候选序号无效，当前共有 " + jobs.size() + " 个岗位。";
         }
         LiepinJobPosting posting = jobs.get(candidateIndex - 1);
+        // 去重：同一岗位不得重复投递（SUBMITTING 表示投递进行中）
+        if ("SUBMITTED".equals(posting.getStatus())) {
+            return "该岗位（" + posting.getJobName() + "｜" + posting.getCompanyName()
+                    + "）已投递成功，请选择其他候选岗位。";
+        }
+        if ("SUBMITTING".equals(posting.getStatus())) {
+            return "该岗位（" + posting.getJobName() + "｜" + posting.getCompanyName()
+                    + "）正在投递中，请稍候。";
+        }
         postingMapper.updateStatus(posting.getId(), "SUBMITTING");
         update(task, LiepinTaskStatus.SUBMITTING, "正在提交候选岗位 #" + candidateIndex + "（含简历）");
         executor.submit(() -> runApplication(task, posting, resume));
@@ -448,8 +461,15 @@ public class LiepinJobTaskManager {
                     posting, resume, ResumeDeliveryMode.AUTO, posting.getGreeting());
             if (result.success()) {
                 postingMapper.updateStatus(posting.getId(), "SUBMITTED");
-                update(task, LiepinTaskStatus.SUCCEEDED, result.message());
-                notifyUser(task.getUserId(), "猎聘投递结果：" + result.message());
+                List<LiepinJobPosting> allPostings = postingMapper.findByTaskId(task.getId());
+                long submitted = allPostings.stream()
+                        .filter(p -> "SUBMITTED".equals(p.getStatus()))
+                        .count();
+                long total = allPostings.size();
+                String progress = "（已投递 " + submitted + "/" + total
+                        + "，可继续选择其他候选岗位或新建搜索任务）";
+                update(task, LiepinTaskStatus.SUCCEEDED, result.message() + progress);
+                notifyUser(task.getUserId(), "猎聘投递结果：" + result.message() + progress);
                 log.info("[LiepinJob] 手动投递成功: taskId={}, postingId={}, job=\"{}\"",
                         task.getId(), posting.getId(), posting.getJobName());
             } else if (result.needsUserAction()) {
@@ -497,10 +517,24 @@ public class LiepinJobTaskManager {
         for (int i = 0; i < limit; i++) {
             LiepinJobPosting job = jobs.get(i);
             text.append(i + 1).append(". ").append(job.getJobName()).append("｜").append(job.getCompanyName())
-                    .append("｜").append(job.getSalary()).append("｜匹配 ").append(job.getMatchScore()).append(" 分\n")
+                    .append("｜").append(job.getSalary()).append("｜匹配 ").append(job.getMatchScore())
+                    .append(" 分").append(statusLabel(job.getStatus())).append("\n")
                     .append("   ").append(job.getMatchReason()).append("\n");
         }
-        return text.append("回复例如\"确认投递第1个岗位\"，系统才会打开页面并发送沟通语。每次只提交一个岗位。").toString();
+        return text.append("回复例如\"确认投递第1个岗位\"，系统才会打开页面并发送沟通语。"
+                + "可逐个投递多个岗位，已投递的不会重复投递。").toString();
+    }
+
+    /** 候选岗位处理状态的可读标注。 */
+    private static String statusLabel(String status) {
+        if (status == null) return "";
+        return switch (status) {
+            case "SUBMITTED" -> "（已投递）";
+            case "SUBMITTING" -> "（投递中）";
+            case "FAILED" -> "（投递失败）";
+            case "NEEDS_USER_ACTION" -> "（需处理）";
+            default -> "";
+        };
     }
 
     /** 更新任务状态（内存 + 数据库）。 */

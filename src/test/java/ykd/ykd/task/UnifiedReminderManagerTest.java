@@ -130,7 +130,8 @@ class UnifiedReminderManagerTest {
 
     @Test
     void shouldSendLLMResultWhenNeedsProcessing() throws Exception {
-        when(llmService.chat(anyString(), eq(null), eq(deepseekClient), eq("u1")))
+        // 提醒走独立通道：skillEnabled=false，绕过技能会话
+        when(llmService.chat(anyString(), eq(null), eq(deepseekClient), eq("u1"), eq(null), eq(false)))
                 .thenReturn("今天天气晴朗");
         doAnswer(inv -> {
             Runnable r = inv.getArgument(1);

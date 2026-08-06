@@ -69,7 +69,10 @@ class LiepinJobToolsTest {
 
         String result = tools().exitLiepinSkill();
 
-        assertThat(result).contains("已退出猎聘技能模式");
+        assertThat(result)
+                .contains("已退出猎聘技能模式")
+                // 退出后同轮工具仍是猎聘工具，必须引导用户重新发送需求，防止编造结果
+                .contains("重新发送需求");
         verify(skillSessionManager).remove("u1");
     }
 

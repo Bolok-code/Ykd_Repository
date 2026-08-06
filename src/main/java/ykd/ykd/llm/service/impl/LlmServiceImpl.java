@@ -20,6 +20,7 @@ import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.skill.model.SkillDefinition;
 import ykd.ykd.skill.registry.SkillRegistry;
 import ykd.ykd.skill.selector.SkillSelector;
+import ykd.ykd.skill.selector.SkillSelectionResult;
 import ykd.ykd.skill.session.SkillSessionManager;
 import ykd.ykd.skill.session.SkillSessionManager.SkillSession;
 import ykd.ykd.skill.tool.SkillToolResolver;
@@ -28,7 +29,6 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Optional;
 
 /**
  * LLM 调用编排层。
@@ -134,11 +134,19 @@ public class LlmServiceImpl implements LlmService {
 
     @Override
     public boolean exitSkill(String userId) {
-        return skillSessionManager.remove(userId) != null;
+        SkillSession removed = skillSessionManager.remove(userId);
+        skillSessionManager.removePending(userId);
+        return removed != null;
     }
 
     @Override
     public String chat(String text, List<String> imageUrls, ChatClient client, String userId, String systemContext) {
+        return chat(text, imageUrls, client, userId, systemContext, true);
+    }
+
+    @Override
+    public String chat(String text, List<String> imageUrls, ChatClient client, String userId,
+                       String systemContext, boolean skillEnabled) {
         long start = System.currentTimeMillis();
         boolean hasImages = imageUrls != null && !imageUrls.isEmpty();
 
@@ -165,9 +173,10 @@ public class LlmServiceImpl implements LlmService {
             // 1. 加载当前用户的对话历史
             List<Message> history = memoryManagerService.getHistory(userId);
             // 2. Skill 匹配（图片消息不匹配 Skill，走视觉模型独立处理）
-            //    优先级: 关键词命中 > 会话保持（10 分钟 TTL） > 无 Skill
-            Optional<SkillDefinition> selectedSkill = hasImages
-                    ? Optional.empty()
+            //    ACTIVATE: 直接激活技能；CONFIRM: 先向用户确认；NONE: 普通对话
+            //    skillEnabled=false（如定时提醒）：完全绕过技能路由，不触碰技能会话状态
+            SkillSelectionResult selection = !skillEnabled || hasImages
+                    ? SkillSelectionResult.none()
                     : pickSkill(finalText, userId);
 
             // 3. 构建请求消息列表（复制历史，避免 Skill 提示词被写入长期记忆）
@@ -178,13 +187,20 @@ public class LlmServiceImpl implements LlmService {
                 requestMessages.add(new SystemMessage(systemContext));
                 log.debug("[LLM] 已注入系统上下文: length={}", systemContext.length());
             }
-            // 激活或续期 Skill 会话
-            selectedSkill.ifPresent(skill -> {
-                skillSessionManager.activate(userId, skill.name());
-                requestMessages.add(0, new SystemMessage(buildSkillPrompt(skill)));
+            // 激活或续期 Skill 会话 / 模糊命中时注入确认提示
+            SkillDefinition activatedSkill = null;
+            if (selection.isActivate()) {
+                activatedSkill = selection.skill();
+                skillSessionManager.activate(userId, activatedSkill.name());
+                requestMessages.add(0, new SystemMessage(buildSkillPrompt(activatedSkill)));
                 log.info("[LLM] 启用Skill: userId={}, skill={}, tools={}",
-                        userId, skill.name(), skill.tools().size());
-            });
+                        userId, activatedSkill.name(), activatedSkill.tools().size());
+            } else if (selection.isConfirm()) {
+                // 模糊命中：不锁技能工具，让模型先向用户确认意图
+                requestMessages.add(0, new SystemMessage(buildSkillConfirmPrompt(selection.skill())));
+                log.info("[LLM] Skill 待确认: userId={}, skill={}",
+                        userId, selection.skill().name());
+            }
 
             // 4. 组装请求
             ChatClient.ChatClientRequestSpec requestSpec = client.prompt()
@@ -192,8 +208,8 @@ public class LlmServiceImpl implements LlmService {
                     .user(userSpec -> buildUserMessage(userSpec, finalText, imageUrls));
 
             // 5. 注册工具 — Skill 模式 vs 普通模式
-            requestSpec.tools(selectedSkill.isPresent()
-                    ? resolveSkillTools(selectedSkill.get(), userId)
+            requestSpec.tools(activatedSkill != null
+                    ? resolveSkillTools(activatedSkill, userId)
                     : defaultTools());
 
             // 6. 调用 LLM
@@ -212,6 +228,17 @@ public class LlmServiceImpl implements LlmService {
                 log.error("[LLM] 对话记忆保存失败: userId={}, error={}", userId, e.getMessage(), e);
             }
             compressIfNeeded(userId, chatResponse);
+
+            // 8. CONFIRM 轮收尾：模型若直接回答了请求（未询问是否使用技能），说明用户意图与
+            //    技能无关，清掉 pending，避免用户随后一句"好的"把无关消息误激活为技能模式。
+            if (selection.isConfirm()) {
+                SkillSession pending = skillSessionManager.getPending(userId, skillTtlMs);
+                if (pending != null && !isSkillConfirmAsk(content)) {
+                    skillSessionManager.removePending(userId);
+                    log.debug("[LLM] 模型未询问技能，清除待确认: userId={}, skill={}",
+                            userId, pending.skillName());
+                }
+            }
 
             log.info("[LLM] 请求完成: elapsed={}ms, userId={}, reply={}",
                     System.currentTimeMillis() - start, userId, abbrev(content, 200));
@@ -294,6 +321,96 @@ public class LlmServiceImpl implements LlmService {
                 """.formatted(skill.name(), skill.description(), skill.instructions());
     }
 
+    /**
+     * 模糊命中时的确认提示：注入系统消息，让模型先询问用户是否要使用该技能，
+     * 而不是直接执行技能操作。工具仍为通用工具集。
+     */
+    private String buildSkillConfirmPrompt(SkillDefinition skill) {
+        return """
+                用户可能想使用「%s」技能（描述：%s）。
+                请先向用户确认是否使用该功能，用一句话问清楚意图，
+                例如"你想用猎聘求职功能吗？我可以帮你搜索岗位、投递简历。"。
+                不要执行该技能的任何操作。
+                你当前没有该技能的工具，但系统已具备该能力；
+                绝对不要回复"没有该功能""工具不可用""无法帮你"之类的话术，
+                也不得编造任何执行结果，只询问用户是否使用该技能。
+                如果用户的实际意图与之无关，请忽略以上提示，正常回答用户的问题即可。
+                """.formatted(skill.name(), skill.description());
+    }
+
+    /**
+     * 归一化消息：去空白、去常见中英文标点、转小写，用于确认/否定词判定。
+     */
+    private static String normalizeConfirmText(String text) {
+        if (text == null) return "";
+        return text.toLowerCase(Locale.ROOT)
+                .replace(" ", "")
+                .replace("，", "").replace("。", "")
+                .replace("！", "").replace("？", "")
+                .replace("!", "").replace("?", "")
+                .replace("、", "").replace(",", "");
+    }
+
+    /**
+     * 用户消息是否为对"是否使用技能"的肯定确认。
+     */
+    private boolean isAffirmative(String text) {
+        String t = normalizeConfirmText(text);
+        if (t.isEmpty()) return false;
+        if (t.startsWith("不") || t.startsWith("别") || t.startsWith("没")) return false;
+        return t.matches("^(是|对|嗯|好|要|行|可以|确定|确认|用|是的|对的|好的|要的|好呀|可以呀|嗯嗯|ok|yes|确认是|确实)$");
+    }
+
+    /** 否定词：消息中任一处出现即不视为技能确认。 */
+    private static final List<String> NEGATIVE_TOKENS =
+            List.of("不", "别", "没", "不用", "不要", "算了", "取消", "不了");
+
+    /** 肯定词开头：按长度降序匹配，先长后短，避免"好"截断"好嘞"。 */
+    private static final List<String> AFFIRMATIVE_PREFIX_TOKENS =
+            List.of("可以啊", "好嘞", "好呀", "可以", "确定", "确认", "好的", "嗯嗯",
+                    "好", "对", "行", "要", "用", "嗯", "是", "ok", "yes");
+
+    /**
+     * 用户消息是否为对"是否使用技能"的肯定确认（放宽版）。
+     *
+     * <p>判定顺序：空 → 含否定词（否定优先）→ 以肯定词开头 → 整句命中
+     * 基础肯定正则 → 具体续句兜底（含数字且含求职相关词，如
+     * "投java 杭州 10k左右的工作"）。</p>
+     */
+    private boolean isAffirmativeFollowUp(String text) {
+        String t = normalizeConfirmText(text);
+        if (t.isEmpty()) return false;
+        if (NEGATIVE_TOKENS.stream().anyMatch(t::contains)) return false;
+        for (String token : AFFIRMATIVE_PREFIX_TOKENS) {
+            if (t.startsWith(token)) return true;
+        }
+        if (isAffirmative(text)) return true;
+        return t.matches(".*\\d.*")
+                && (t.contains("工作") || t.contains("岗位") || t.contains("简历")
+                || t.contains("投递") || t.contains("投"));
+    }
+
+    /**
+     * 用户消息是否为对"是否使用技能"的否定/放弃。
+     */
+    private boolean isNegative(String text) {
+        String t = normalizeConfirmText(text);
+        if (t.isEmpty()) return false;
+        return t.matches("^(不用|不要|不需要|算了|取消|没有|不是|别|别了|不用了|不要了|不不|不了|不需要了|不用了谢谢)$");
+    }
+
+    /**
+     * 判断模型回复是否为"是否使用某技能"的确认询问。
+     * 仅当回复既带问号又提到技能相关词时，pending 才保留（说明模型确实向用户确认了技能意图）；
+     * "已取消提醒。还有其他需要吗？"这类普通收尾语不含技能词，不算确认询问。
+     */
+    private static boolean isSkillConfirmAsk(String reply) {
+        if (reply == null || reply.isBlank()) return false;
+        if (!(reply.contains("？") || reply.contains("?"))) return false;
+        return reply.contains("技能") || reply.contains("猎聘") || reply.contains("求职")
+                || reply.contains("投递") || reply.contains("知识库") || reply.contains("简历");
+    }
+
     // ── 辅助方法 ──────────────────────────────────────────────
 
     /**
@@ -307,6 +424,7 @@ public class LlmServiceImpl implements LlmService {
         String normalized = trimmed.toLowerCase(Locale.ROOT).replace(" ", "");
         if (isExitCommand(normalized)) {
             SkillSession removed = skillSessionManager.remove(userId);
+            skillSessionManager.removePending(userId);
             if (removed != null) {
                 log.info("[LLM] 手动退出Skill: userId={}, skill={}", userId, removed.skillName());
                 return "已退出" + removed.skillName() + "技能模式，回到普通对话。";
@@ -329,28 +447,84 @@ public class LlmServiceImpl implements LlmService {
     }
 
     /**
-     * Skill 选择策略: 关键词命中 > 会话保持(TTL) > 无 Skill。
-     * 多轮对话中不会因单条消息缺关键词而丢失 Skill 上下文。
+     * Skill 选择策略: 高置信激活 > 模糊命中待确认 > 会话保持(TTL) > 无 Skill。
+     *
+     * <p>模糊命中时不直接激活技能模式，而是记录候选 Skill 返回 {@code CONFIRM}，
+     * 由模型先询问用户；用户显式肯定（"是/对/好"）后才正式激活。
+     * 即使同一 Skill 反复模糊命中也不会自动激活——"取消任务"这类泛化消息
+     * 会与猎聘 description 产生 0.5x 相似度，自动激活会锁死工具集。</p>
      */
-    private Optional<SkillDefinition> pickSkill(String text, String userId) {
-        // 优先关键词匹配
-        Optional<SkillDefinition> matched = skillSelector.select(text);
-        if (matched.isPresent()) {
-            log.debug("[LLM] Skill 关键词命中: userId={}, skill={}", userId, matched.get().name());
-            return matched;
+    private SkillSelectionResult pickSkill(String text, String userId) {
+        // 优先 Embedding/关键词匹配
+        SkillSelectionResult selection = skillSelector.select(text);
+        if (selection.isActivate()) {
+            // 高置信命中：清掉残留待确认，直接激活
+            skillSessionManager.removePending(userId);
+            log.debug("[LLM] Skill 命中: userId={}, skill={}", userId, selection.skill().name());
+            return selection;
         }
-        // 未命中则检查会话保持
+        if (selection.isConfirm()) {
+            // 已在活跃技能模式（TTL 内）：保持原技能，不降级。避免"确定投递"这类技能内指令
+            // 被误判为模糊命中而降级为普通对话，导致工具解锁、模型编造执行结果。
+            SkillSelectionResult active = keepAliveIfActive(userId);
+            if (active.isActivate()) {
+                skillSessionManager.removePending(userId);
+                log.info("[LLM] 技能模式内模糊命中，保持原技能: userId={}, skill={}",
+                        userId, active.skill().name());
+                return active;
+            }
+            // 用户上轮已被询问技能意图，本轮给出明确肯定（"好""对""用"等）且消息再次
+            // 落在模糊命中区间时，消费 pending 直接激活，避免无限"待确认"循环。
+            SkillSession pending = skillSessionManager.getPending(userId, skillTtlMs);
+            if (pending != null && pending.skillName().equals(selection.skill().name())
+                    && isAffirmativeFollowUp(text)) {
+                skillSessionManager.removePending(userId);
+                SkillDefinition pendingSkill = skillRegistry.findEnabledByName(pending.skillName()).orElse(null);
+                if (pendingSkill != null) {
+                    log.info("[LLM] 用户确认Skill(模糊重命中): userId={}, skill={}",
+                            userId, pendingSkill.name());
+                    return SkillSelectionResult.activate(pendingSkill);
+                }
+            }
+            // 模糊命中一律只询问，绝不因"重提同技能"自动激活——"取消任务"这类泛化消息会与
+            // 猎聘 description 产生 0.5x 相似度，自动激活会锁死工具、导致提醒等无法处理。
+            skillSessionManager.setPending(userId, selection.skill().name());
+            return selection;
+        }
+        // 未命中：检查是否存在待确认 Skill（用户上轮被询问后的回复）
+        SkillSession pending = skillSessionManager.getPending(userId, skillTtlMs);
+        if (pending != null) {
+            skillSessionManager.removePending(userId);
+            SkillDefinition pendingSkill = skillRegistry.findEnabledByName(pending.skillName()).orElse(null);
+            if (pendingSkill != null && isAffirmativeFollowUp(text)) {
+                log.info("[LLM] 用户确认Skill: userId={}, skill={}", userId, pendingSkill.name());
+                return SkillSelectionResult.activate(pendingSkill);
+            }
+            // 否定或换话题 → 放弃确认，回到普通对话
+            log.info("[LLM] 放弃Skill确认: userId={}, skill={}", userId, pending.skillName());
+        }
+        // 未命中则检查会话保持（已激活 Skill 的 TTL 续期）
+        return keepAliveIfActive(userId);
+    }
+
+    /**
+     * 已激活 Skill 的会话保持（10 分钟 TTL）：多轮对话中不会因单条消息缺关键词而丢失上下文。
+     */
+    private SkillSelectionResult keepAliveIfActive(String userId) {
         SkillSession session = skillSessionManager.get(userId);
         if (session != null) {
             long elapsed = System.currentTimeMillis() - session.lastActiveAt();
             if (elapsed < skillTtlMs) {
-                return skillRegistry.findEnabledByName(session.skillName());
+                SkillDefinition skill = skillRegistry.findEnabledByName(session.skillName()).orElse(null);
+                if (skill != null) {
+                    return SkillSelectionResult.activate(skill);
+                }
             }
             log.debug("[LLM] Skill 会话过期: userId={}, skill={}, elapsed={}ms",
                     userId, session.skillName(), elapsed);
             skillSessionManager.remove(userId);
         }
-        return Optional.empty();
+        return SkillSelectionResult.none();
     }
 
     private void compressIfNeeded(String userId, ChatResponse response) {
