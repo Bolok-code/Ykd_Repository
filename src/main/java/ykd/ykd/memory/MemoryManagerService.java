@@ -14,8 +14,6 @@ import ykd.ykd.memory.service.ConversationHistoryService;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 对话记忆管理器。
@@ -33,8 +31,6 @@ public class MemoryManagerService {
     private final ChatMemory chatMemory;
     private final ChatClient summaryClient;
     private final ConversationHistoryService conversationHistoryService;
-    private final Set<String> hydratedUsers = ConcurrentHashMap.newKeySet();
-    private final ConcurrentHashMap<String, Object> hydrationLocks = new ConcurrentHashMap<>();
 
     public MemoryManagerService(ChatMemory chatMemory,
                                 ChatClient summaryClient,
@@ -87,7 +83,6 @@ public class MemoryManagerService {
         validateUserId(userId);
         int deleted = conversationHistoryService.clearHistory(userId);
         chatMemory.clear(userId);
-        hydratedUsers.add(userId);
         log.info("[MemoryManager] 清除记忆: userId={}, deleted={}", userId, deleted);
     }
 
@@ -172,41 +167,26 @@ public class MemoryManagerService {
     /**
      * 从 SQLite 惰性恢复用户对话历史到内存中的 {@link ChatMemory}。
      *
-     * <p>每个用户仅恢复一次（通过 {@code hydratedUsers} 集合记录），
-     * 后续调用直接跳过。采用双检锁 + 按用户粒度的锁，保证多线程安全。</p>
-     *
-     * @param userId 用户 ID
+     * <p>Caffeine 自动淘汰沉默用户的 ChatMemory；该方法检测到内存中无数据时
+     * 从 SQLite 重新加载，内部 {@code computeIfAbsent} 保证单用户并发安全。</p>
      */
     private void hydrateFromDatabaseIfNeeded(String userId) {
-        if (hydratedUsers.contains(userId)) {
+        List<Message> existing = chatMemory.get(userId);
+        if (existing != null && !existing.isEmpty()) {
             return;
         }
 
-        Object lock = hydrationLocks.computeIfAbsent(userId, ignored -> new Object());
-        synchronized (lock) {
-            // 双检：进入同步块后再次确认，防止并发时重复恢复
-            if (hydratedUsers.contains(userId)) {
-                return;
-            }
+        List<Message> restoredMessages = conversationHistoryService
+                .findAllMessages(userId)
+                .stream()
+                .map(this::toSpringAiMessage)
+                .filter(message -> message != null)
+                .toList();
 
-            try {
-                // 从 SQLite 查出全部消息，转为 Spring AI Message 后批量写入 ChatMemory
-                List<Message> restoredMessages = conversationHistoryService
-                        .findAllMessages(userId)
-                        .stream()
-                        .map(this::toSpringAiMessage)
-                        .filter(message -> message != null)
-                        .toList();
-
-                if (!restoredMessages.isEmpty()) {
-                    chatMemory.add(userId, restoredMessages);
-                    log.info("[MemoryManager] 从 SQLite 恢复历史: userId={}, count={}",
-                            userId, restoredMessages.size());
-                }
-                hydratedUsers.add(userId);
-            } finally {
-                hydrationLocks.remove(userId, lock);
-            }
+        if (!restoredMessages.isEmpty()) {
+            chatMemory.add(userId, restoredMessages);
+            log.info("[MemoryManager] 从 SQLite 恢复历史: userId={}, count={}",
+                    userId, restoredMessages.size());
         }
     }
 
