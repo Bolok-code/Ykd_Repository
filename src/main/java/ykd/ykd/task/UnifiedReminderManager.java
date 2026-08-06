@@ -383,7 +383,9 @@ public class UnifiedReminderManager {
         userContext.executeAs(task.userId, () -> {
             try {
                 String prompt = "⏰ 定时提醒：" + task.message;
-                String reply = llmService.chat(prompt, null, deepseekClient, task.userId);
+                // 提醒是系统生成的消息：关闭技能路由，避免被用户活跃的技能会话劫持
+                //（如猎聘会话锁住工具导致天气提醒无法查询），同时不改变用户技能会话状态
+                String reply = llmService.chat(prompt, null, deepseekClient, task.userId, null, false);
                 log.info("[Reminder] LLM 回复: userId={}, reply={}",
                         task.userId, reply != null ? reply.substring(0, Math.min(100, reply.length())) : null);
                 weixinBotService.sendTextToUser(task.userId, reply);

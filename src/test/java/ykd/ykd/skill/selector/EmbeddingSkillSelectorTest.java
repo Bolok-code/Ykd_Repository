@@ -7,8 +7,6 @@ import ykd.ykd.skill.loader.SkillLoader;
 import ykd.ykd.skill.model.SkillDefinition;
 import ykd.ykd.skill.registry.SkillRegistry;
 
-import java.util.Optional;
-
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -23,12 +21,13 @@ class EmbeddingSkillSelectorTest {
     private static final String OTHER_VEC = "[0.0, 0.0, 1.0]";
 
     private EmbeddingSkillSelector skillSelector;
+    private EmbeddingService embeddingService;
 
     // === Embedding 主路径测试（mock API 正常） ===
 
     @BeforeEach
     void setUp() {
-        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        embeddingService = mock(EmbeddingService.class);
 
         when(embeddingService.jsonToFloatArray(anyString())).thenAnswer(inv -> {
             String json = inv.getArgument(0);
@@ -79,60 +78,85 @@ class EmbeddingSkillSelectorTest {
     }
 
     @Test
-    void shouldSelectLiepinSkillForJobSearch() {
-        Optional<SkillDefinition> result = skillSelector.select(
-                "帮我在猎聘搜索杭州Java岗位");
-        assertTrue(result.isPresent());
-        assertEquals("liepin-auto-apply", result.get().name());
+    void shouldActivateLiepinSkillForJobSearch() {
+        SkillSelectionResult result = skillSelector.select("帮我在猎聘搜索杭州Java岗位");
+        assertActivate(result, "liepin-auto-apply");
     }
 
     @Test
-    void shouldSelectLiepinSkillForAutoApply() {
-        Optional<SkillDefinition> result = skillSelector.select("给我创建一个自动投递计划");
-        assertTrue(result.isPresent());
-        assertTrue(result.get().tools().contains("createLiepinAutoApplyCampaign"));
+    void shouldActivateLiepinSkillForAutoApply() {
+        SkillSelectionResult result = skillSelector.select("给我创建一个自动投递计划");
+        assertActivate(result, "liepin-auto-apply");
+        assertTrue(result.skill().tools().contains("createLiepinAutoApplyCampaign"));
     }
 
     @Test
-    void shouldSelectLiepinSkillForCampaignManagement() {
-        assertTrue(skillSelector.select("查看我的投递状态").isPresent());
-        assertTrue(skillSelector.select("暂停投递").isPresent());
-        assertTrue(skillSelector.select("停止投递").isPresent());
+    void shouldActivateLiepinSkillForCampaignManagement() {
+        assertActivate(skillSelector.select("查看我的投递状态"), "liepin-auto-apply");
+        assertActivate(skillSelector.select("暂停投递"), "liepin-auto-apply");
+        assertActivate(skillSelector.select("停止投递"), "liepin-auto-apply");
     }
 
     // === 知识库 Skill 路由测试 ===
 
     @Test
-    void shouldSelectKnowledgeBaseSkillForStoreDocument() {
-        Optional<SkillDefinition> result = skillSelector.select("存入我们知识库");
-        assertTrue(result.isPresent());
-        assertEquals("knowledge-base", result.get().name());
+    void shouldActivateKnowledgeBaseSkillForStoreDocument() {
+        SkillSelectionResult result = skillSelector.select("存入我们知识库");
+        assertActivate(result, "knowledge-base");
     }
 
     @Test
-    void shouldSelectKnowledgeBaseSkillForDocQA() {
-        assertTrue(skillSelector.select("根据我的文档总结关键信息").isPresent());
-        assertTrue(skillSelector.select("资料里提到了什么").isPresent());
+    void shouldActivateKnowledgeBaseSkillForDocQA() {
+        assertActivate(skillSelector.select("根据我的文档总结关键信息"), "knowledge-base");
+        assertActivate(skillSelector.select("资料里提到了什么"), "knowledge-base");
+    }
+
+    // === 模糊命中：应返回 CONFIRM 而非直接激活 ===
+
+    @Test
+    void shouldConfirmSkillWhenScoreInAmbiguousRange() {
+        // "取消任务" 与猎聘 description 的相似度落在 0.45~0.60 区间 → 待确认，不直接激活
+        when(embeddingService.embed("取消任务")).thenReturn("[0.5, 0.0, 0.866]");
+        SkillSelectionResult result = skillSelector.select("取消任务");
+        assertConfirm(result, "liepin-auto-apply");
+    }
+
+    @Test
+    void shouldActivateLiepinWhenExplicitKeywordDespiteFuzzyScore() {
+        // 回归：生产日志 2026-08-05 中"使用猎聘 投递java 杭州 10k左右的工作"的语义相似度
+        // 落在模糊区间（0.537），但消息含"猎聘""投递"强特征词，必须直接激活；
+        // 否则确认轮无限循环，用户始终拿不到猎聘工具，模型会误答"没有该工具"。
+        when(embeddingService.embed("使用猎聘 投递java 杭州 10k左右的工作"))
+                .thenReturn("[0.55, 0.0, 0.835]");
+        SkillSelectionResult result = skillSelector.select("使用猎聘 投递java 杭州 10k左右的工作");
+        assertActivate(result, "liepin-auto-apply");
+    }
+
+    @Test
+    void shouldNotActivateSkillForLowScore() {
+        // 相似度低于 0.45 且无关键词 → NONE
+        when(embeddingService.embed("明天杭州天气怎么样")).thenReturn("[0.3, 0.0, 0.954]");
+        assertNone(skillSelector.select("明天杭州天气怎么样"));
     }
 
     // === 负例：不应该命中任何 Skill ===
 
     @Test
     void shouldNotSelectSkillForWeatherQuery() {
-        assertTrue(skillSelector.select("明天杭州天气怎么样").isEmpty());
+        assertNone(skillSelector.select("明天杭州天气怎么样"));
     }
 
     @Test
     void shouldNotSelectSkillForNormalDocumentQuestion() {
         // "帮助我总结一下这份文件" vs 天气——两者都跟任何 Skill description 不匹配
-        assertTrue(skillSelector.select("帮我总结一下这份简历").isEmpty());
+        assertNone(skillSelector.select("帮我总结一下这份简历"));
     }
 
     @Test
-    void shouldReturnEmptyForBlankMessage() {
-        assertTrue(skillSelector.select(null).isEmpty());
-        assertTrue(skillSelector.select("").isEmpty());
-        assertTrue(skillSelector.select("   ").isEmpty());
+    void shouldReturnNoneForBlankMessage() {
+        assertNone(skillSelector.select(null));
+        assertNone(skillSelector.select(""));
+        assertNone(skillSelector.select("   "));
     }
 
     // === 降级路径测试（Embedding API 不可用） ===
@@ -153,14 +177,14 @@ class EmbeddingSkillSelectorTest {
         fallbackSelector.buildEmbeddingCache(); // 缓存为空
 
         // "猎聘" 出现在 description 中 → 降级关键词匹配应命中
-        assertTrue(fallbackSelector.select("帮我在猎聘搜索杭州Java岗位").isPresent());
+        assertActivate(fallbackSelector.select("帮我在猎聘搜索杭州Java岗位"), "liepin-auto-apply");
 
         // "投递" 出现在 description 中 → 应命中
-        assertTrue(fallbackSelector.select("帮我投递简历").isPresent());
-        assertTrue(fallbackSelector.select("查看投递状态").isPresent());
+        assertActivate(fallbackSelector.select("帮我投递简历"), "liepin-auto-apply");
+        assertActivate(fallbackSelector.select("查看投递状态"), "liepin-auto-apply");
 
         // 不相关消息 → 不应命中
-        assertTrue(fallbackSelector.select("明天天气怎么样").isEmpty());
+        assertNone(fallbackSelector.select("明天天气怎么样"));
     }
 
     @Test
@@ -178,14 +202,33 @@ class EmbeddingSkillSelectorTest {
         fallbackSelector.buildEmbeddingCache(); // 缓存为空，走关键词降级
 
         // "使用""功能" 这类 2 字泛词嵌入在长句中，不应误命中任何 Skill
-        assertTrue(fallbackSelector.select("这个功能怎么使用").isEmpty());
-        assertTrue(fallbackSelector.select("请问这个功能怎么使用").isEmpty());
+        assertNone(fallbackSelector.select("这个功能怎么使用"));
+        assertNone(fallbackSelector.select("请问这个功能怎么使用"));
     }
 
     @Test
-    void shouldReturnEmptyWhenCacheIsEmptyAndNoKeywordMatch() {
+    void shouldReturnNoneWhenCacheIsEmptyAndNoKeywordMatch() {
         EmbeddingSkillSelector emptySelector = new EmbeddingSkillSelector(
                 mock(SkillRegistry.class), mock(EmbeddingService.class));
-        assertTrue(emptySelector.select("猎聘搜索岗位").isEmpty());
+        assertNone(emptySelector.select("猎聘搜索岗位"));
+    }
+
+    // === 辅助断言 ===
+
+    private static void assertActivate(SkillSelectionResult result, String skillName) {
+        assertEquals(SkillSelectionResult.ResultType.ACTIVATE, result.type());
+        assertNotNull(result.skill());
+        assertEquals(skillName, result.skill().name());
+    }
+
+    private static void assertConfirm(SkillSelectionResult result, String skillName) {
+        assertEquals(SkillSelectionResult.ResultType.CONFIRM, result.type());
+        assertNotNull(result.skill());
+        assertEquals(skillName, result.skill().name());
+    }
+
+    private static void assertNone(SkillSelectionResult result) {
+        assertEquals(SkillSelectionResult.ResultType.NONE, result.type());
+        assertNull(result.skill());
     }
 }

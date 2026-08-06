@@ -198,7 +198,9 @@ public class LiepinJobTools {
     public String exitLiepinSkill() {
         String userId = requireUserId();
         skillSessionManager.remove(userId);
-        return "已退出猎聘技能模式，后续可以直接进行普通对话。如需再次搜索岗位或创建投递计划，随时告诉我。";
+        return "已退出猎聘技能模式，后续可以直接进行普通对话。如需再次搜索岗位或创建投递计划，随时告诉我。"
+                + "注意：本轮对话的工具仍是猎聘工具，无法执行天气等其他请求；"
+                + "请勿编造结果，直接告知用户已退出，并请用户重新发送需求。";
     }
 
     // ── 内部辅助 ──────────────────────────────────────────────

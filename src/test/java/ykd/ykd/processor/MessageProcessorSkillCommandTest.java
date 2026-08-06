@@ -17,12 +17,12 @@ import ykd.ykd.job.task.LiepinJobTaskManager;
 import ykd.ykd.llm.service.LlmService;
 import ykd.ykd.llm.tools.DocumentTools;
 import ykd.ykd.skill.model.SkillDefinition;
+import ykd.ykd.skill.selector.SkillSelectionResult;
 import ykd.ykd.skill.selector.SkillSelector;
 import ykd.ykd.task.ImageBatchManager;
 import ykd.ykd.task.VideoTaskManager;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.Queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,7 +74,7 @@ class MessageProcessorSkillCommandTest {
     void skillCommandShouldNotClearDocumentCache() {
         try (MockedStatic<DocumentTools> mocked = mockStatic(DocumentTools.class)) {
             mocked.when(() -> DocumentTools.hasCachedDocument(USER_ID)).thenReturn(true);
-            when(skillSelector.select("存入知识库")).thenReturn(Optional.of(KB_SKILL));
+            when(skillSelector.select("存入知识库")).thenReturn(SkillSelectionResult.activate(KB_SKILL));
             when(llmService.chat(eq("存入知识库"), eq(List.of()), eq(deepseekClient), eq(USER_ID)))
                     .thenReturn("好的，正在处理");
 
