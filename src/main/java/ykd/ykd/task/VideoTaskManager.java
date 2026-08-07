@@ -32,6 +32,11 @@ public class VideoTaskManager {
     private final VideoService videoService;
     private final Map<String, VideoTask> tasks = new ConcurrentHashMap<>();
     private volatile boolean running = true;
+    /** 任务最长等待时间：超过仍未完成视为僵尸任务，定期清理 */
+    private static final long MAX_TASK_AGE_MS = 60 * 60 * 1000L;
+    /** 僵尸任务扫描间隔 */
+    private static final long SWEEP_INTERVAL_MS = 60 * 1000L;
+    private long lastSweepAt = 0L;
 
     /** 完成回调，由 MessageProcessor 在初始化时设置为入队操作 */
     private Consumer<ProcessResult> onCompleted;
@@ -79,12 +84,14 @@ public class VideoTaskManager {
                             handleCompleted(task, result);
                         } else if ("failed".equals(state)) {
                             task.status = Status.FAILED;
-                            log.warn("[VideoTaskManager] 任务失败: taskId={}", task.taskId);
+                            tasks.remove(task.taskId);
+                            log.warn("[VideoTaskManager] 任务失败并移除: taskId={}", task.taskId);
                         }
                     } catch (Exception e) {
                         log.warn("[VideoTaskManager] 查询异常: taskId={}", task.taskId, e);
                     }
                 }
+                sweepStaleTasks();
                 Thread.sleep(5000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -97,6 +104,8 @@ public class VideoTaskManager {
 
     private void handleCompleted(VideoTask task, JsonNode result) {
         task.status = Status.COMPLETED;
+        // 完成后立即从任务表移除，避免 Map 无限增长
+        tasks.remove(task.taskId);
         log.info("[VideoTaskManager] 任务完成，完整响应: {}", result);
         String videoUrl = result.path("metadata").path("url").asText();
 
@@ -115,6 +124,24 @@ public class VideoTaskManager {
                     task.userId, videoData.length / 1024);
         } else {
             log.warn("[VideoTaskManager] 完成回调未设置: taskId={}", task.taskId);
+        }
+    }
+
+    /**
+     * 定期清理超过 {@link #MAX_TASK_AGE_MS} 仍未完成的任务，
+     * 防止视频服务端一直不返回终态导致内存泄漏。
+     */
+    private void sweepStaleTasks() {
+        long now = System.currentTimeMillis();
+        if (now - lastSweepAt < SWEEP_INTERVAL_MS) return;
+        lastSweepAt = now;
+        for (Map.Entry<String, VideoTask> entry : tasks.entrySet()) {
+            VideoTask task = entry.getValue();
+            if (task.status == Status.PENDING && now - task.createdAt > MAX_TASK_AGE_MS) {
+                tasks.remove(task.taskId);
+                log.warn("[VideoTaskManager] 清理超时未完成的任务: taskId={}, ageMs={}",
+                        task.taskId, now - task.createdAt);
+            }
         }
     }
 

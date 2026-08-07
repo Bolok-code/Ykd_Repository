@@ -12,7 +12,9 @@ import ykd.ykd.memory.service.ConversationHistoryService;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -71,6 +73,40 @@ class MemoryManagerServiceTest {
         assertThat(manager.getHistory(USER_ID))
                 .extracting(Message::getText)
                 .containsExactly("今天天气怎么样", "今天晴朗");
+    }
+
+    @Test
+    void shouldNotCompressShortHistoryEvenWhenPromptTokensAreLarge() {
+        ConversationHistoryService historyService = mock(ConversationHistoryService.class);
+        when(historyService.findAllMessages(USER_ID)).thenReturn(List.of());
+
+        // 触发 token 很大（完整 prompt 含系统提示与工具定义），但历史本身很短
+        ChatClient summaryClient = mock(ChatClient.class);
+        ChatClient.ChatClientRequestSpec spec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.CallResponseSpec call = mock(ChatClient.CallResponseSpec.class);
+        when(summaryClient.prompt()).thenReturn(spec);
+        when(spec.messages(anyList())).thenReturn(spec);
+        when(spec.call()).thenReturn(call);
+        when(call.content()).thenReturn("测试摘要");
+
+        MemoryManagerService manager = new MemoryManagerService(
+                newChatMemory(),
+                summaryClient,
+                historyService
+        );
+        manager.save(USER_ID, "今天天气怎么样", "今天晴朗", "DeepSeek");
+
+        manager.compressIfNeeded(USER_ID, 100_000);
+
+        // 历史不足保留阈值时不得把全部消息折叠成摘要
+        assertThat(manager.getHistory(USER_ID))
+                .extracting(Message::getText)
+                .containsExactly("今天天气怎么样", "今天晴朗");
+        verify(historyService, never()).replaceHistory(
+                org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList()
+        );
     }
 
     private ChatMemory newChatMemory() {

@@ -299,4 +299,61 @@ class LlmServiceImplTest {
         verify(skillToolResolver, never()).resolve(any());
         assertThat(skillSessionManager.getPending(USER_ID)).isNull();
     }
+
+    @Test
+    void exactExitCommandExitsSkill() {
+        skillSessionManager.activate(USER_ID, LIEPIN_SKILL.name());
+
+        String reply = llmService.chat("退出猎聘", List.of(), deepseekClient, USER_ID);
+
+        assertThat(reply).isEqualTo("已退出liepin-auto-apply技能模式，回到普通对话。");
+        assertThat(skillSessionManager.get(USER_ID)).isNull();
+        assertThat(skillSessionManager.getPending(USER_ID)).isNull();
+        verify(skillSelector, never()).select(anyString());
+    }
+
+    @Test
+    void prefixExitWithRemainderExitsSkillAndUsesDefaultTools() {
+        // 模拟日志场景：用户用了知识库后直接说"退出知识库帮我查询杭州天气"。
+        // 必须真正退出技能会话，剩余请求走普通对话（默认工具），
+        // 且不能因消息里的"知识库"关键词重新激活技能。
+        SkillDefinition kbSkill = new SkillDefinition(
+                "knowledge-base", "知识库管理", "1.0.0", true,
+                List.of("addDocumentToKnowledgeBase", "answerFromKnowledgeBase"), "instructions");
+        skillSessionManager.activate(USER_ID, kbSkill.name());
+        when(skillRegistry.findEnabledByName(kbSkill.name())).thenReturn(Optional.of(kbSkill));
+
+        String reply = llmService.chat("退出知识库帮我查询杭州天气", List.of(), deepseekClient, USER_ID);
+
+        assertThat(skillSessionManager.get(USER_ID)).isNull();
+        assertThat(skillSessionManager.getPending(USER_ID)).isNull();
+        verify(skillSelector, never()).select(anyString());
+        verify(skillToolResolver, never()).resolve(any());
+        assertThat(reply).startsWith("✅ 已退出knowledge-base技能模式。");
+    }
+
+    @Test
+    void prefixExitWithoutActiveSessionProcessesRemainderNormally() {
+        // 没有活跃技能会话时，"退出知识库帮我查天气"不应报错或重新激活，直接走普通对话
+        String reply = llmService.chat("退出知识库帮我查天气", List.of(), deepseekClient, USER_ID);
+
+        assertThat(reply).isEqualTo("投递完成");
+        verify(skillSelector, never()).select(anyString());
+        assertThat(skillSessionManager.get(USER_ID)).isNull();
+    }
+
+    @Test
+    void campaignManagementPhraseDoesNotExitSkill() {
+        // "退出投递计划"是猎聘计划管理指令，不是退出技能：技能会话应保持并继续走技能路由
+        skillSessionManager.activate(USER_ID, LIEPIN_SKILL.name());
+        when(skillRegistry.findEnabledByName(LIEPIN_SKILL.name())).thenReturn(Optional.of(LIEPIN_SKILL));
+        when(skillSelector.select("退出投递计划")).thenReturn(SkillSelectionResult.none());
+        when(skillToolResolver.resolve(LIEPIN_SKILL)).thenReturn(new ToolCallback[0]);
+
+        String reply = llmService.chat("退出投递计划", List.of(), deepseekClient, USER_ID);
+
+        assertThat(reply).isEqualTo("投递完成");
+        assertThat(skillSessionManager.get(USER_ID)).isNotNull();
+        verify(skillToolResolver).resolve(LIEPIN_SKILL);
+    }
 }

@@ -1,4 +1,4 @@
-﻿package ykd.ykd.llm.config;
+package ykd.ykd.llm.config;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
