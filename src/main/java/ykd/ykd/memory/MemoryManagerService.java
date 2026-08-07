@@ -114,6 +114,14 @@ public class MemoryManagerService {
                 break;
             }
         }
+        // 历史总量不足保留阈值时（触发可能来自完整 prompt 中的系统提示/工具定义，
+        // 而非历史本身很大），没有可压缩的旧消息：保留全部，避免把刚发生的内容
+        // 反复折叠成摘要、导致对话细节丢失。
+        if (splitIndex == history.size()) {
+            log.info("[MemoryManager] 历史较短，跳过压缩: userId={}, 历史token≈{}, 触发token={}",
+                    userId, estimateTokens(history), actualTokens);
+            return;
+        }
         if (splitIndex <= 0) {
             return;
         }

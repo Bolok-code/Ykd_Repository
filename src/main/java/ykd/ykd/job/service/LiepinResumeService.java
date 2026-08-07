@@ -16,6 +16,7 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -52,13 +53,17 @@ public class LiepinResumeService {
         resume.setContent(content);
         resumeMapper.upsert(resume);
 
-        // 只有确实有新附件字节时才处理磁盘附件。
-        // 新附件写成功后再清理旧文件，防止写失败时旧附件丢失。
         if (originalBytes != null && originalBytes.length > 0) {
             LiepinResumeAsset oldAsset = assetMapper.findByUserId(userId);
-            persistAsset(userId, fileName, originalBytes);
-            if (oldAsset != null && oldAsset.getFilePath() != null) {
-                deleteFileQuietly(oldAsset.getFilePath());
+            // 只有确实写入了新的附件文件才清理旧附件；
+            // 非附件格式（如 md/txt）不写入新附件，此时必须保留旧附件，
+            // 避免把技术文档误存为简历时删掉用户真实的简历文件。
+            String newFilePath = persistAsset(userId, fileName, originalBytes);
+            if (newFilePath != null && oldAsset != null) {
+                String oldPath = oldAsset.getFilePath();
+                if (oldPath != null && !oldPath.equals(newFilePath)) {
+                    deleteFileQuietly(oldPath);
+                }
             }
         }
     }
@@ -101,18 +106,62 @@ public class LiepinResumeService {
         }
     }
 
+    /** 简历章节关键词：命中 >=2 且含身份特征才判定为疑似简历 */
+    private static final List<String> RESUME_SECTION_KEYWORDS =
+            List.of("教育经历", "工作经历", "项目经历", "专业技能", "求职意向", "个人信息");
+    /** 简历身份特征：真实简历通常包含姓名或联系方式 */
+    private static final List<String> RESUME_IDENTITY_KEYWORDS =
+            List.of("姓名", "电话", "手机", "邮箱", "性别", "年龄", "出生日期", "求职意向", "期望薪资", "工作年限");
+    /** 文件名中的技术文档标记：命中且文件名不含"简历"时直接排除 */
+    private static final List<String> TECH_DOC_NAME_MARKERS =
+            List.of("详解", "说明", "技术", "模块", "文档", "手册", "教程", "设计", "架构", "分析", "指南", "readme");
+    /** 内容中的技术排版特征：真实简历文本极少出现 */
+    private static final List<String> TECH_DOC_CONTENT_MARKERS =
+            List.of("```", "## ", "### ", "调用链路", "数据库表", "配置文件", "架构总览", "目录", "源码");
+
     public boolean looksLikeResume(String fileName, String content) {
-        String source = (fileName == null ? "" : fileName) + "\n" + (content == null ? "" : content);
-        int hits = 0;
-        for (String keyword : new String[]{"简历", "教育经历", "工作经历", "项目经历", "专业技能", "求职意向", "个人信息"}) {
-            if (source.contains(keyword)) hits++;
+        String name = fileName == null ? "" : fileName;
+        String nameLower = name.toLowerCase(Locale.ROOT);
+        String body = content == null ? "" : content;
+
+        // 1. 文件名明确包含 resume
+        if (nameLower.contains("resume")) return true;
+
+        // 2. 文件名带明显技术文档标记时排除（除非文件名本身含"简历"）
+        boolean techDocName = TECH_DOC_NAME_MARKERS.stream().anyMatch(nameLower::contains);
+        if (techDocName && !nameLower.contains("简历")) return false;
+
+        // 3. Markdown/技术排版特征：真实简历文本极少出现
+        if (TECH_DOC_CONTENT_MARKERS.stream().anyMatch(body::contains)) return false;
+
+        // 4. 文件名含"简历"且有简历章节关键词 → 高置信
+        if (nameLower.contains("简历")
+                && RESUME_SECTION_KEYWORDS.stream().anyMatch(body::contains)) {
+            return true;
         }
-        return hits >= 2 || (fileName != null && fileName.toLowerCase(Locale.ROOT).contains("resume"));
+
+        // 5. 内容判定：至少 2 个简历章节关键词 + 至少 1 个身份特征
+        int sectionHits = countHits(RESUME_SECTION_KEYWORDS, body);
+        int identityHits = countHits(RESUME_IDENTITY_KEYWORDS, body);
+        return sectionHits >= 2 && identityHits >= 1;
     }
 
-    private void persistAsset(String userId, String fileName, byte[] bytes) {
+    private static int countHits(List<String> keywords, String source) {
+        int hits = 0;
+        for (String keyword : keywords) {
+            if (source.contains(keyword)) hits++;
+        }
+        return hits;
+    }
+
+    /**
+     * 将附件写入磁盘并更新附件记录。
+     *
+     * @return 新附件文件的绝对路径；非附件格式（未写入）时返回 {@code null}
+     */
+    private String persistAsset(String userId, String fileName, byte[] bytes) {
         String extension = extension(fileName);
-        if (!ATTACHMENT_TYPES.contains(extension)) return;
+        if (!ATTACHMENT_TYPES.contains(extension)) return null;
         String fileHash = sha256(bytes);
         String userFolder = sha256(userId.getBytes(java.nio.charset.StandardCharsets.UTF_8)).substring(0, 16);
         Path root = Path.of(properties.getResumeDirectory()).toAbsolutePath().normalize();
@@ -142,6 +191,7 @@ public class LiepinResumeService {
         asset.setFileSize((long) bytes.length);
         asset.setFileHash(fileHash);
         assetMapper.upsert(asset);
+        return target.toString();
     }
 
     private String extension(String fileName) {

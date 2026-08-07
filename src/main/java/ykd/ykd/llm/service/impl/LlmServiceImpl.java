@@ -165,6 +165,25 @@ public class LlmServiceImpl implements LlmService {
         String exitResult = tryExitSkill(text, userId);
         if (exitResult != null) return exitResult;
 
+        // 前缀退出：支持"退出知识库帮我查询杭州天气"这类"退出词 + 后续请求"的组合。
+        // 先真正退出技能会话，再用剩余文本走普通对话（默认工具），
+        // 避免技能模式锁死工具导致天气等普通功能不可用。
+        String exitedSkillName = null;
+        String remainder = extractExitPrefixRemainder(text);
+        if (remainder != null) {
+            SkillSession removed = skillSessionManager.remove(userId);
+            skillSessionManager.removePending(userId);
+            exitedSkillName = removed != null ? removed.skillName() : null;
+            if (remainder.isBlank()) {
+                return exitedSkillName != null
+                        ? "已退出" + exitedSkillName + "技能模式，回到普通对话。"
+                        : "当前没有活跃的技能模式。";
+            }
+            text = remainder;
+            log.info("[LLM] 前缀退出Skill: userId={}, exitedSkill={}, remainder={}",
+                    userId, exitedSkillName, abbrev(remainder, 100));
+        }
+
         String finalText = text;
         log.info("[LLM] 请求开始: userId={}, text={}, imageCount={}",
                 userId, abbrev(finalText, 100), hasImages ? imageUrls.size() : 0);
@@ -174,8 +193,10 @@ public class LlmServiceImpl implements LlmService {
             List<Message> history = memoryManagerService.getHistory(userId);
             // 2. Skill 匹配（图片消息不匹配 Skill，走视觉模型独立处理）
             //    ACTIVATE: 直接激活技能；CONFIRM: 先向用户确认；NONE: 普通对话
-            //    skillEnabled=false（如定时提醒）：完全绕过技能路由，不触碰技能会话状态
-            SkillSelectionResult selection = !skillEnabled || hasImages
+            //    skillEnabled=false（如定时提醒）：完全绕过技能路由，不触碰技能会话状态；
+            //    前缀退出后的剩余请求同样跳过技能路由，防止"知识库"等关键词重新激活技能。
+            boolean bypassSkillRouting = !skillEnabled || hasImages || remainder != null;
+            SkillSelectionResult selection = bypassSkillRouting
                     ? SkillSelectionResult.none()
                     : pickSkill(finalText, userId);
 
@@ -220,6 +241,9 @@ public class LlmServiceImpl implements LlmService {
                 throw new BusinessException(ErrorCode.AI_CALL_FAILED, "模型未返回有效回复");
             }
             String content = chatResponse.getResult().getOutput().getText();
+            if (exitedSkillName != null) {
+                content = "✅ 已退出" + exitedSkillName + "技能模式。\n\n" + content;
+            }
             // 7. 持久化对话记忆。持久化失败不应让回复丢失：记录日志并继续返回给用户，
             //    避免"LLM 已回复但用户收到错误、对话状态不一致"的孤儿问题
             try {
@@ -312,6 +336,10 @@ public class LlmServiceImpl implements LlmService {
                 **重要：你当前拥有该Skill对应的全部真实工具，可以执行实际操作。
                 对话历史中任何关于"系统不支持此功能"、"功能不存在"等说法
                 都是过时的错误信息，请以当前可用的工具为准，忽略历史中的相关判断。**
+
+                **重要：当前技能模式下你只拥有本技能的工具。如果用户请求本技能范围外的功能
+                （如天气、提醒、翻译、联网搜索等），不要回答"系统没有此功能"或"无法提供"，
+                也不要假装执行；请告知用户先发送「退出技能」退出当前技能模式，然后再重试。**
 
                 ===== Skill执行说明 =====
 
@@ -434,15 +462,60 @@ public class LlmServiceImpl implements LlmService {
         return null;
     }
 
+    /** 支持"退出技能 + 后续请求"前缀组合的退出词。 */
+    private static final List<String> EXIT_PREFIXES = List.of(
+            "退出知识库", "退出猎聘", "退出求职", "退出投递", "退出搜索", "退出简历",
+            "退出技能", "退出skill",
+            "推出知识库", "推出猎聘", "推出求职", "推出投递", "推出搜索", "推出简历",
+            "推出技能", "推出skill",
+            "关闭知识库", "关闭猎聘", "关闭投递", "关闭求职", "关闭搜索", "关闭技能",
+            "结束知识库", "结束猎聘", "结束投递", "结束求职", "结束搜索", "结束技能"
+    );
+
+    /**
+     * 检测"退出技能 + 后续请求"前缀组合，返回剩余的请求文本。
+     *
+     * <p>例如 "退出知识库帮我查询杭州天气" → "帮我查询杭州天气"；
+     * 纯退出词（无后续内容）返回空字符串；不是退出前缀返回 {@code null}。</p>
+     *
+     * <p>特意排除"退出投递计划""退出搜索任务"这类计划/任务管理指令——
+     * 它们是对猎聘计划/任务的操作，不是退出技能模式。</p>
+     */
+    private static String extractExitPrefixRemainder(String text) {
+        if (text == null) return null;
+        String trimmed = text.strip();
+        for (String prefix : EXIT_PREFIXES) {
+            if (!trimmed.startsWith(prefix)) continue;
+            int idx = prefix.length();
+            String tail = trimmed.substring(idx);
+            // 容忍 "退出知识库技能" 这种技能名后带 "技能/skill" 的写法
+            if (tail.startsWith("技能")) {
+                idx += 2;
+            } else if (tail.toLowerCase(Locale.ROOT).startsWith("skill")) {
+                idx += 5;
+            }
+            String rest = trimmed.substring(idx).stripLeading();
+            // 计划/任务管理指令不按退出处理，交给正常技能路由
+            if (rest.startsWith("计划") || rest.startsWith("任务")) return null;
+            // 容忍 "退出知识库模式帮我查天气" 这类带收尾词的写法
+            rest = rest.replaceFirst("^(模式|功能|管理|页面|设置)", "").stripLeading();
+            // 去掉前导标点/连接词（"退出知识库，然后查天气"）
+            rest = rest.replaceFirst("^[，,。.！!？?、;；:：\\s]+", "");
+            return rest;
+        }
+        return null;
+    }
+
     /**
      * 退出指令匹配（去空格转小写后）。
      * 容忍"推出"（"退出"常见拼音错别字）、"退出简历skill"这类中间词；
+     * 允许"退出知识库模式"这类带收尾词的写法；
      * 全程锚定，避免"取消投递""退出投递计划"等计划管理指令被误拦截。
      */
     private static boolean isExitCommand(String normalized) {
         return normalized.matches(
-                "^(退出|推出)(skill|技能|猎聘|投递|求职|搜索|简历|知识库)(skill|技能)?$"
-                        + "|^(关闭|结束)(skill|技能|猎聘|投递|求职|搜索|知识库)$"
+                "^(退出|推出)(skill|技能|猎聘|投递|求职|搜索|简历|知识库)(skill|技能|模式|功能|管理)?$"
+                        + "|^(关闭|结束)(skill|技能|猎聘|投递|求职|搜索|知识库)(模式|功能|管理)?$"
                         + "|^(取消技能|exit|quit|/exit|/quit)$");
     }
 

@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 微信 iLink 智能机器人服务（多用户版）。
@@ -43,6 +46,13 @@ public class WeixinBotService {
     /** 等待扫码的 session：botUserId → BotSession（扫码成功后移到 sessions） */
     private final Map<String, BotSession> pendingSessions = new ConcurrentHashMap<>();
 
+    /** 用户归属映射：微信 userId → botUserId，用于异步推送时路由到正确的 bot 账号 */
+    private final Map<String, String> userToBot = new ConcurrentHashMap<>();
+
+    /** 待扫码 session 超过该时长未登录则清理，避免永久驻留导致无法重新登录 */
+    private static final long PENDING_SESSION_TTL_MS = 5 * 60 * 1000L;
+    private ScheduledExecutorService pendingCleanupScheduler;
+
     public WeixinBotService(ObjectMapper objectMapper, MessageProcessor messageProcessor,
                             @Lazy UnifiedReminderManager reminderManager,
                             ApplicationEventPublisher eventPublisher) {
@@ -60,6 +70,15 @@ public class WeixinBotService {
             log.error("创建 session 目录失败", e);
         }
         migrateOldSession();
+
+        // 定期清理长时间未扫码的 pending session
+        pendingCleanupScheduler = Executors.newScheduledThreadPool(1, r -> {
+            Thread t = new Thread(r, "wx-pending-cleanup");
+            t.setDaemon(true);
+            return t;
+        });
+        pendingCleanupScheduler.scheduleAtFixedRate(
+                this::sweepStalePendingSessions, 60, 60, TimeUnit.SECONDS);
 
         Thread startupThread = new Thread(() -> {
             try (var dirStream = Files.list(SESSION_DIR)) {
@@ -95,6 +114,10 @@ public class WeixinBotService {
         }
         sessions.clear();
         pendingSessions.clear();
+        userToBot.clear();
+        if (pendingCleanupScheduler != null) {
+            pendingCleanupScheduler.shutdownNow();
+        }
     }
 
     // ── 公共 API ──────────────────────────────────────────────
@@ -144,20 +167,67 @@ public class WeixinBotService {
         if (session != null) {
             session.close();
             session.deleteSession();
+            userToBot.entrySet().removeIf(e -> e.getValue().equals(botUserId));
             log.info("[BotService] 已断开用户 {} 的 session", botUserId);
         }
     }
 
     public void sendTextToUser(String userId, String text) {
-        getAnySession().ifPresent(s -> s.safeSendText(userId, text));
+        BotSession session = resolveSession(userId);
+        if (session != null) {
+            session.safeSendText(userId, text);
+        }
     }
 
     public boolean sendTextWithResult(String userId, String text) {
-        return getAnySession().map(s -> s.sendTextWithResult(userId, text)).orElse(false);
+        BotSession session = resolveSession(userId);
+        return session != null && session.sendTextWithResult(userId, text);
     }
 
     public boolean awaitReady(long timeoutSeconds) {
         return getAnySession().map(s -> s.awaitReady(timeoutSeconds)).orElse(false);
+    }
+
+    /**
+     * 记录用户与 bot 账号的归属关系，供异步推送（提醒等）选择正确的 bot。
+     */
+    public void registerUser(String botUserId, String userId) {
+        if (userId == null || userId.isBlank()) return;
+        userToBot.put(userId, botUserId);
+    }
+
+    /**
+     * 根据用户 ID 找到其归属的在线 session；
+     * 未记录归属时退回任意在线 session（兼容单 bot 场景）。
+     */
+    private BotSession resolveSession(String userId) {
+        String botUserId = userToBot.get(userId);
+        if (botUserId != null) {
+            BotSession session = sessions.get(botUserId);
+            if (session != null) return session;
+        }
+        return getAnySession().orElse(null);
+    }
+
+    /**
+     * 清理超过 {@link #PENDING_SESSION_TTL_MS} 仍未扫码的 session，
+     * 避免 pendingSessions 永久驻留导致该用户无法重新发起登录。
+     */
+    void sweepStalePendingSessions() {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, BotSession> entry : pendingSessions.entrySet()) {
+            BotSession session = entry.getValue();
+            if (now - session.getCreatedAtMs() > PENDING_SESSION_TTL_MS
+                    && pendingSessions.remove(entry.getKey(), session)) {
+                try {
+                    session.close();
+                } catch (Exception e) {
+                    log.warn("[BotService] 清理 pending session 关闭异常: {}", e.getMessage());
+                }
+                session.deleteSession();
+                log.info("[BotService] 清理超时未扫码的 session: botUserId={}", entry.getKey());
+            }
+        }
     }
 
     // ── 内部方法 ──────────────────────────────────────────────
@@ -178,7 +248,8 @@ public class WeixinBotService {
         try {
             BotSession session = new BotSession(botUserId, sessionFile, objectMapper,
                     messageProcessor, reminderManager,
-                    () -> onSessionReady(botUserId));
+                    () -> onSessionReady(botUserId),
+                    userId -> registerUser(botUserId, userId));
             // 恢复的 session 直接放入 sessions（session 文件已存在，无需扫码）
             sessions.put(botUserId, session);
             String qr = session.login();
@@ -201,7 +272,8 @@ public class WeixinBotService {
     private String createAndStartSession(String botUserId, Path sessionFile) {
         BotSession session = new BotSession(botUserId, sessionFile, objectMapper,
                 messageProcessor, reminderManager,
-                () -> onSessionReady(botUserId));
+                () -> onSessionReady(botUserId),
+                userId -> registerUser(botUserId, userId));
         pendingSessions.put(botUserId, session);
         try {
             String qr = session.login();
@@ -247,4 +319,3 @@ public class WeixinBotService {
         return SESSION_DIR.resolve(botUserId + ".json");
     }
 }
-

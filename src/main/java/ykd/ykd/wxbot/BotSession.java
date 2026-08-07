@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * 单个微信 bot 账号的会话。
@@ -42,6 +43,8 @@ public class BotSession implements AutoCloseable {
     private final MessageProcessor messageProcessor;
     private final UnifiedReminderManager reminderManager;
     private final Runnable onReady;
+    /** 收到消息时回调，用于登记 userId → botUserId 归属，供异步推送路由 */
+    private final Consumer<String> onUserMessage;
 
     private ILinkClient client;
     private final PerUserTaskDispatcher dispatcher;
@@ -66,13 +69,14 @@ public class BotSession implements AutoCloseable {
 
     public BotSession(String botUserId, Path sessionFile, ObjectMapper objectMapper,
                       MessageProcessor messageProcessor, UnifiedReminderManager reminderManager,
-                      Runnable onReady) {
+                      Runnable onReady, Consumer<String> onUserMessage) {
         this.botUserId = botUserId;
         this.sessionFile = sessionFile;
         this.objectMapper = objectMapper;
         this.messageProcessor = messageProcessor;
         this.reminderManager = reminderManager;
         this.onReady = onReady;
+        this.onUserMessage = onUserMessage;
         this.dispatcher = new PerUserTaskDispatcher(8, 100, 5);
         this.senderScheduler = Executors.newScheduledThreadPool(1, r -> {
             Thread t = new Thread(r, "wx-sender-" + botUserId);
@@ -230,6 +234,11 @@ public class BotSession implements AutoCloseable {
     private void handleMessage(WeixinMessage msg) {
         log.info("📩 [BotSession:{}] 收到微信消息: from={}, msgId={}", botUserId, msg.getFrom_user_id(), msg.getMessage_id());
         String userId = msg.getFrom_user_id();
+
+        // 登记用户归属，确保后续提醒等异步推送发到正确的 bot 账号
+        if (onUserMessage != null) {
+            onUserMessage.accept(userId);
+        }
 
         boolean accepted = dispatcher.submit(userId, () -> {
             ProcessResult result = messageProcessor.process(msg, client);

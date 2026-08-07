@@ -30,7 +30,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.Base64;
+import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -90,6 +92,9 @@ public class MessageProcessor {
     private final Queue<ProcessResult> completedImageBatches = new BoundedResultQueue(10);
     private final Queue<ProcessResult> completedLiepinTasks = new BoundedResultQueue(50);
     private final Queue<ProcessResult> voiceQueue;
+    /** 疑似简历待确认状态：userId → 开始等待时间戳。只有用户显式确认后才保存为求职简历 */
+    private static final long RESUME_CONFIRM_TTL_MS = 10 * 60 * 1000L;
+    private final Map<String, Long> pendingResumeUsers = new ConcurrentHashMap<>();
 
     public MessageProcessor(LlmService llmService,
                             ChatClient deepseekClient,
@@ -184,26 +189,27 @@ public class MessageProcessor {
                         result[0] = fileName;
                         return;
                     }
-                    boolean resumeSaved = liepinResumeService.looksLikeResume(fileName, cachedContent);
-                    if (resumeSaved) {
-                        byte[] originalBytes = DocumentTools.getCachedBytes(fromUserId);
-                        liepinResumeService.save(fromUserId, fileName, cachedContent, originalBytes);
-                        // 保留缓存：saveCurrentDocumentAsLiepinResume 工具需要读原文；
-                        // Skill 命令会由 isSkillCommand 自动清缓存并走正常路由
+
+                    // 疑似简历的文件：只标记待确认，绝不自动保存。
+                    // 防止"猎聘模块详解"这类含大量"简历"关键词的技术文档被误存为求职简历，
+                    // 覆盖真实简历并触发附件误删。
+                    boolean resumeCandidate = liepinResumeService.looksLikeResume(fileName, cachedContent);
+                    if (resumeCandidate) {
+                        pendingResumeUsers.put(fromUserId, System.currentTimeMillis());
                     }
 
-                    // 识别为简历时，注入"系统支持猎聘投递"的上下文，
-                    // 盖过对话历史里"没有投递功能"的过时错误记忆
                     String systemContext;
                     String summaryPrompt;
-                    if (resumeSaved) {
+                    String tailHint;
+                    if (resumeCandidate) {
                         systemContext = String.format(
-                                "用户发送了简历文件「%s」，内容如下：\n---\n%s\n---\n\n"
-                                + "这是用户的求职简历，已成功保存到系统。当前系统具备猎聘岗位搜索、"
-                                + "简历匹配和自动投递能力。请简要确认简历要点，并引导用户下一步操作"
-                                + "（如搜索岗位或创建投递计划）。不要再说系统不支持投递。",
+                                "用户发送了文件「%s」，内容如下：\n---\n%s\n---\n\n"
+                                + "该文件疑似是一份求职简历。请先向用户确认是否要将它保存为求职简历：\n"
+                                + "1. 只询问意图，不要总结简历内容，不要宣称已保存；\n"
+                                + "2. 同时说明如果不是简历，还可以存入知识库或进行其他处理。",
                                 fileName, cachedContent);
-                        summaryPrompt = "用户刚发送了求职简历，请确认简历要点并引导下一步";
+                        summaryPrompt = "用户发送了疑似简历的文件，请确认是否保存为求职简历";
+                        tailHint = "\n\n（回复「保存为简历」即可确认；如果不是简历，回复「不保存」）";
                     } else {
                         // 非简历文件：不自动总结，先问清楚用户想做什么
                         systemContext = String.format(
@@ -215,17 +221,50 @@ public class MessageProcessor {
                                 + "不要直接总结文件内容，先问清楚用户意图。",
                                 fileName, cachedContent.length());
                         summaryPrompt = String.format("用户发送了文件「%s」。请确认收到文件，并询问用户希望如何处理。", fileName);
+                        tailHint = "";
                     }
-                    String reply = llmService.chat(summaryPrompt, List.of(), deepseekClient, fromUserId, systemContext);
-                    result[0] = resumeSaved
-                            ? reply + "\n\n✅ 简历已保存。可以直接对我说「帮我搜索岗位」或「创建自动投递计划」。"
-                            : reply;
+                    // 系统生成的询问消息关闭 Skill 路由，避免询问文案自身触发 liepin/knowledge-base 待确认状态
+                    String reply = llmService.chat(summaryPrompt, List.of(), deepseekClient, fromUserId, systemContext, false);
+                    result[0] = reply + tailHint;
                 } catch (Exception e) {
                     log.error("[Processor] 文件处理失败: {}", e.getMessage(), e);
                     result[0] = "❌ 文件处理失败，请稍后重试";
                 }
             });
             return ProcessResult.text(result[0] != null ? result[0] : "❌ 文件处理失败", fromUserId);
+        }
+
+        // 疑似简历确认：上一条文件疑似简历时，只有用户显式确认才保存为求职简历
+        Long pendingResumeAt = pendingResumeUsers.get(fromUserId);
+        if (pendingResumeAt != null && System.currentTimeMillis() - pendingResumeAt > RESUME_CONFIRM_TTL_MS) {
+            pendingResumeUsers.remove(fromUserId);
+            pendingResumeAt = null;
+        }
+        if (pendingResumeAt != null && !hasFileItem(msg) && DocumentTools.hasCachedDocument(fromUserId)) {
+            String voiceText0 = extractVoiceText(msg);
+            String text0 = extractText(msg);
+            if (voiceText0 != null && !voiceText0.isBlank()) {
+                text0 = (text0 != null) ? text0 + " " + voiceText0 : voiceText0;
+            }
+            if (text0 != null && !text0.isBlank()) {
+                String trimmed = text0.trim();
+                if (isResumeReject(trimmed)) {
+                    pendingResumeUsers.remove(fromUserId);
+                    log.info("[Processor] 用户拒绝保存为简历: userId={}", fromUserId);
+                    return ProcessResult.text("好的，没有保存为求职简历。该文件仍可存入知识库或进行其他处理。", fromUserId);
+                }
+                if (isResumeConfirm(trimmed)) {
+                    pendingResumeUsers.remove(fromUserId);
+                    log.info("[Processor] 用户确认保存为简历: userId={}", fromUserId);
+                    return confirmAndSaveResume(fromUserId);
+                }
+                // 用户表达其他明确用途（如存入知识库、总结文件）时，撤销待确认状态，避免后续误触发
+                if (isOtherFileIntent(trimmed)) {
+                    pendingResumeUsers.remove(fromUserId);
+                    log.info("[Processor] 用户选择其他文件用途，撤销简历待确认: userId={}", fromUserId);
+                }
+                // 其余情况（如对文件追问）保留待确认状态，走正常文件追问流程
+            }
         }
 
         if (DocumentTools.hasCachedDocument(fromUserId)) {
@@ -522,6 +561,88 @@ public class MessageProcessor {
             log.warn("[Processor] Skill 命令检测失败，按普通消息处理: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * 用户对"是否保存为求职简历"的肯定确认。
+     * 需要显式提到简历（"保存为简历""是简历""确认保存"），或明确的保存指令；
+     * 纯"好/嗯/是"不算，避免无关消息误触发保存。
+     */
+    private static boolean isResumeConfirm(String text) {
+        String t = normalizeResumeReply(text);
+        if (t.isEmpty()) return false;
+        if (t.contains("不") || t.contains("别") || t.contains("没")) return false;
+        if (t.contains("简历")) {
+            return t.contains("保存") || t.contains("设为") || t.contains("确认")
+                    || t.contains("是") || t.contains("要") || t.contains("用") || t.contains("对");
+        }
+        return t.endsWith("保存") || t.contains("保存简历");
+    }
+
+    /** 用户明确拒绝保存为简历。 */
+    private static boolean isResumeReject(String text) {
+        String t = normalizeResumeReply(text);
+        if (t.isEmpty()) return false;
+        return t.equals("不保存") || t.equals("不用") || t.equals("不用了") || t.equals("不要")
+                || t.equals("不需要") || t.equals("算了") || t.equals("取消") || t.equals("不了")
+                || t.contains("不是简历") || t.contains("不保存") || t.contains("别保存");
+    }
+
+    /** 用户表达了与"保存为简历"无关的其他文件用途。 */
+    private static boolean isOtherFileIntent(String text) {
+        if (text == null) return false;
+        return text.contains("知识库") || text.contains("资料库") || text.contains("存入")
+                || text.contains("总结") || text.contains("问答") || text.contains("删除")
+                || text.contains("存库");
+    }
+
+    /** 归一化简历确认/拒绝回复：去空白、常见中英文标点、转小写。 */
+    private static String normalizeResumeReply(String text) {
+        if (text == null) return "";
+        return text.replaceAll("\\s+", "")
+                .replace("，", "").replace("。", "").replace("！", "").replace("？", "")
+                .replace("!", "").replace("?", "").replace("、", "").replace(",", "")
+                .toLowerCase();
+    }
+
+    /**
+     * 用户显式确认后，将缓存中的文件保存为求职简历，并让 LLM 确认要点。
+     */
+    private ProcessResult confirmAndSaveResume(String fromUserId) {
+        String fileName = DocumentTools.getCachedFileName(fromUserId);
+        String cachedContent = DocumentTools.getCachedContent(fromUserId);
+        if (fileName == null || cachedContent == null) {
+            log.warn("[Processor] 简历确认时缓存已失效: userId={}", fromUserId);
+            return ProcessResult.text("❌ 文件缓存已失效，请重新发送简历文件。", fromUserId);
+        }
+        try {
+            byte[] originalBytes = DocumentTools.getCachedBytes(fromUserId);
+            liepinResumeService.save(fromUserId, fileName, cachedContent, originalBytes);
+        } catch (Exception e) {
+            log.error("[Processor] 保存简历失败: userId={}, error={}", fromUserId, e.getMessage(), e);
+            return ProcessResult.text("❌ 保存简历失败，请稍后重试", fromUserId);
+        }
+
+        String[] result = new String[1];
+        String systemContext = String.format(
+                "用户发送了简历文件「%s」，内容如下：\n---\n%s\n---\n\n"
+                + "这是用户的求职简历，已成功保存到系统。当前系统具备猎聘岗位搜索、"
+                + "简历匹配和自动投递能力。请简要确认简历要点，并引导用户下一步操作"
+                + "（如搜索岗位或创建投递计划）。不要再说系统不支持投递。",
+                fileName, cachedContent);
+        String summaryPrompt = "用户刚确认将文件保存为求职简历，请确认简历要点并引导下一步";
+        userContext.executeAs(fromUserId, () -> {
+            try {
+                result[0] = llmService.chat(summaryPrompt, List.of(), deepseekClient, fromUserId, systemContext, false);
+            } catch (Exception e) {
+                log.error("[Processor] 简历要点确认失败: {}", e.getMessage(), e);
+                result[0] = null;
+            }
+        });
+        String reply = result[0] != null ? result[0] : "✅ 简历已保存。";
+        return ProcessResult.text(
+                reply + "\n\n✅ 简历已保存。可以直接对我说「帮我搜索岗位」或「创建自动投递计划」。",
+                fromUserId);
     }
 
 }
